@@ -2,7 +2,7 @@
     'use strict';
 
     var COMPONENT_NAME = 'continue_movies';
-    var PAGE_SIZE = 200; // Все фильмы на одной странице
+    var PAGE_SIZE = 40;
 
     function getContinueMovies() {
         var result = Lampa.Favorite.get({ type: 'history' });
@@ -31,14 +31,17 @@
     function ContinueMoviesComponent(object) {
         var CategoryFull = Lampa.Component.get('category_full');
         var all   = getContinueMovies();
-
-        // Все фильмы на одной странице — total_pages: 1 чтобы не было навигации
+        var total = Math.max(1, Math.ceil(all.length / PAGE_SIZE));
         var origList = Lampa.Api.list;
+
+        // Патчим Api.list постоянно пока компонент жив
         Lampa.Api.list = function (obj, resolve, reject) {
             if (obj && obj._continue_movies_data) {
-                Lampa.Api.list = origList;
-                if (all.length) {
-                    resolve({ results: all, total_pages: 1, page: 1 });
+                var p      = parseInt(obj.page || 1);
+                var offset = (p - 1) * PAGE_SIZE;
+                var res    = all.slice(offset, offset + PAGE_SIZE);
+                if (res.length) {
+                    resolve({ results: res, total_pages: total, page: p });
                 } else {
                     reject();
                 }
@@ -52,7 +55,7 @@
         var comp = new CategoryFull(object);
 
         comp.use({
-            onInstance: function (item, data) {
+            onlyInstance: function (item, data) {
                 item.use({
                     onEnter: function () {
                         Lampa.Activity.push({
@@ -76,7 +79,12 @@
         this.stop    = comp.stop    ? comp.stop.bind(comp)    : function () {};
         this.refresh = comp.refresh ? comp.refresh.bind(comp) : function () {};
         this.render  = comp.render.bind(comp);
-        this.destroy = comp.destroy.bind(comp);
+
+        // При уничтожении восстанавливаем Api.list
+        this.destroy = function () {
+            Lampa.Api.list = origList;
+            comp.destroy();
+        };
 
         Object.defineProperty(this, 'activity', {
             get: function () { return comp.activity; },
