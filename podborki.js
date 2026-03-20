@@ -1,12 +1,9 @@
-/* ==== Плагин подборок стримингов для Lampa ==== */
 
 (function () {
     'use strict';
 
     if (window.plugin_streaming_collections_ready) return;
     window.plugin_streaming_collections_ready = true;
-
-    // ====================== СЕРВИСЫ ======================
 
     var globalStreaming = [
         { id: 213, title: 'Netflix' }, { id: 2739, title: 'Disney+' },
@@ -38,11 +35,8 @@
         { id: 'popularity.desc', title: 'sc_sort_popular' }
     ];
 
-    // ====================== ЛОГОТИПЫ ======================
-
     var logoPending = {};
 
-    // Persistent кэш — сохраняем URL логотипов в localStorage
     var LOGO_STORAGE_KEY = 'sc_logo_cache';
     var logoCache = Lampa.Storage.get(LOGO_STORAGE_KEY) || {};
 
@@ -64,7 +58,6 @@
             delete logoPending[networkId];
             cbs.forEach(function (cb) { cb(url); });
         }, function () {
-            // Не сохраняем пустые в persistent кэш — попробуем снова в следующий раз
             var cbs = logoPending[networkId] || [];
             delete logoPending[networkId];
             cbs.forEach(function (cb) { cb(''); });
@@ -74,8 +67,6 @@
     function preloadLogos() {
         globalStreaming.concat(russianStreaming).forEach(function (s) { getLogoUrl(s.id, function () {}); });
     }
-
-    // ====================== НАСТРОЙКИ ======================
 
     function getAll() { return Lampa.Storage.get('streaming_collections_settings') || {}; }
     function getProfile() {
@@ -87,8 +78,6 @@
         var a = getAll(), pid = Lampa.Storage.get('lampac_profile_id', '') || 'default';
         if (!a[pid]) a[pid] = {}; a[pid][k] = v; Lampa.Storage.set('streaming_collections_settings', a);
     }
-
-    // ====================== ФИЛЬТРЫ ======================
 
     var BASE_KW = '346488,158718,41278,13141,345822,315535,290667,323477,290609';
 
@@ -123,9 +112,6 @@
         return a;
     }
 
-    // ====================== РЕНДЕР-СПИСОК ======================
-    // Для каждого сервиса создаём ВСЕ включённые сортировки, потом перемешиваем
-
     var currentRenderList = null;
     var renderTimestamp = 0;
 
@@ -137,7 +123,6 @@
         var sorts = getEnabledSorts();
         var combos = [];
 
-        // Каждый сервис × каждая сортировка
         for (var i = 0; i < services.length; i++) {
             for (var j = 0; j < sorts.length; j++) {
                 combos.push({
@@ -153,9 +138,6 @@
         return currentRenderList;
     }
 
-    // ====================== ИКОНКА В ЗАГОЛОВКЕ ======================
-
-    // Реестр: titleText -> { networkId, serviceName }
     var titleRegistry = {};
 
     function registerTitle(titleText, networkId, serviceName) {
@@ -168,7 +150,7 @@
         var wrap = $('<span>').css({
             display: 'inline-flex', 'align-items': 'center', 'justify-content': 'center',
             width: '1.9em', height: '1.9em',
-            'background-color': 'rgba(255,255,255,0.15)',
+            'background-color': 'rgba(255,255,255,0.60)',
             'border-radius': '0.35em', 'margin-right': '0.45em', 'flex-shrink': '0'
         });
 
@@ -200,25 +182,23 @@
         });
     }
 
-    // Глобальный наблюдатель — ловит появление новых рядов на странице
     var observerStarted = false;
 
     function startObserver() {
         if (observerStarted) return;
         observerStarted = true;
 
-        // Периодическая проверка (надёжнее MutationObserver для Lampa)
         setInterval(processAllTitles, 500);
     }
 
-    // ====================== ГЕНЕРАЦИЯ ======================
-
     function makeRow(service, isRussian, sort) {
         var baseParams = '';
+
         if (sort.id === 'first_air_date.desc') {
             var e = new Date(); e.setDate(e.getDate() - 10);
             var s = new Date(); s.setFullYear(s.getFullYear() - 3);
-            baseParams += '&first_air_date.gte=' + s.toISOString().split('T')[0] + '&first_air_date.lte=' + e.toISOString().split('T')[0];
+            baseParams += '&first_air_date.gte=' + s.toISOString().split('T')[0];
+            baseParams += '&first_air_date.lte=' + e.toISOString().split('T')[0];
         }
         if (!isRussian) baseParams += '&vote_count.gte=10';
         baseParams += '&without_keywords=' + encodeURIComponent(BASE_KW);
@@ -243,9 +223,7 @@
         };
     }
 
-    // ====================== РЕГИСТРАЦИЯ ======================
-
-    var MAX_ROWS = 16; // больше слотов — больше комбинаций поместится
+    var MAX_ROWS = 16;
 
     function registerContentRows() {
         for (var i = 0; i < MAX_ROWS; i++) {
@@ -266,8 +244,6 @@
         }
     }
 
-    // ====================== ЛОКАЛИЗАЦИЯ ======================
-
     function addLang() {
         Lampa.Lang.add({
             sc_plugin_title: { ru: 'Подборки', en: 'Collections', uk: 'Підбірки' },
@@ -287,8 +263,6 @@
             sc_filters: { ru: 'Фильтры', en: 'Filters', uk: 'Фільтри' }
         });
     }
-
-    // ====================== НАСТРОЙКИ ======================
 
     function addSettings() {
         Lampa.SettingsApi.addComponent({
@@ -360,8 +334,6 @@
             }
         });
     }
-
-    // ====================== ЗАПУСК ======================
 
     function start() { addLang(); preloadLogos(); startObserver(); registerContentRows(); addSettings(); }
 
