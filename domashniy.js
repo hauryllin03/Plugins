@@ -122,18 +122,27 @@
     }
 
     function kpRequest(url, onSuccess, onError) {
-        var xhr = new XMLHttpRequest();
-        xhr.open('GET', url, true);
-        xhr.setRequestHeader('X-API-KEY', API_TOKEN);
-        xhr.setRequestHeader('Content-Type', 'application/json');
-        xhr.onload = function () {
-            if (xhr.status >= 200 && xhr.status < 300) {
-                try { onSuccess(JSON.parse(xhr.responseText)); }
-                catch (e) { onError(); }
-            } else { onError(); }
-        };
-        xhr.onerror = onError;
-        xhr.send();
+        // Добавляем токен как query-параметр вместо заголовка, чтобы избежать preflight-запроса
+        var separator = url.indexOf('?') !== -1 ? '&' : '?';
+        var fullUrl = url + separator + 'token=' + API_TOKEN;
+
+        // Используем встроенный прокси Lampa для обхода CORS
+        if (typeof Lampa !== 'undefined' && Lampa.Reguest) {
+            var network = new Lampa.Reguest();
+            network.timeout(15000);
+            network.silent(fullUrl, function (data) {
+                onSuccess(data);
+            }, onError);
+        } else {
+            // Фолбэк: простой fetch без кастомных заголовков (без preflight)
+            $.ajax({
+                url: fullUrl,
+                type: 'GET',
+                dataType: 'json',
+                success: onSuccess,
+                error: onError
+            });
+        }
     }
 
     function makeRow(sort) {
