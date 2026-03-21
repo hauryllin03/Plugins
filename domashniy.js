@@ -83,7 +83,8 @@
         var yearTo = now.getFullYear();
         var yearFrom = yearTo - 3;
 
-        var url = API_BASE + '?page=' + (page || 1) + '&limit=20';
+        var url = API_BASE + '?token=' + API_TOKEN;
+        url += '&page=' + (page || 1) + '&limit=20';
         url += '&networks.items.name=' + encodeURIComponent(NETWORK_NAME);
         url += '&sortField=' + sort.id;
         url += '&sortType=' + sort.sortType;
@@ -124,25 +125,21 @@
     function makeRow(sort) {
         return function (callback) {
             var url = buildApiUrl(sort);
+            var net = new Lampa.Reguest();
 
-            $.ajax({
-                url: url,
-                headers: { 'X-API-KEY': API_TOKEN },
-                success: function (data) {
-                    if (!data || !data.docs || !data.docs.length) return callback({ results: [] });
+            net.silent(url, function (data) {
+                if (!data || !data.docs || !data.docs.length) return callback({ results: [] });
 
-                    var results = data.docs.map(kpToLampaCard);
-                    var t = Lampa.Lang.translate(sort.title) + ' — ' + NETWORK_NAME;
-                    registerTitle(t);
+                var results = data.docs.map(kpToLampaCard);
+                var t = Lampa.Lang.translate(sort.title) + ' — ' + NETWORK_NAME;
+                registerTitle(t);
 
-                    callback({
-                        results: results,
-                        title: t,
-                        nomore: true
-                    });
-                },
-                error: function () { callback({ results: [] }); }
-            });
+                callback({
+                    results: results,
+                    title: t,
+                    nomore: true
+                });
+            }, function () { callback({ results: [] }); });
         };
     }
 
