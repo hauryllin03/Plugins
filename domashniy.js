@@ -164,7 +164,7 @@
                 Lampa.ContentRows.add({
                     index: 3 + idx * 2,
                     name: 'dm_row_' + idx,
-                    title: '',
+                    title: NETWORK_NAME,
                     screen: ['main'],
                     call: function () {
                         var list = getCurrentRenderList();
