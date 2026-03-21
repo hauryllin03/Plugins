@@ -83,8 +83,7 @@
         var yearTo = now.getFullYear();
         var yearFrom = yearTo - 3;
 
-        var url = API_BASE + '?token=' + API_TOKEN;
-        url += '&page=' + (page || 1) + '&limit=20';
+        var url = API_BASE + '?page=' + (page || 1) + '&limit=20';
         url += '&networks.items.name=' + encodeURIComponent(NETWORK_NAME);
         url += '&sortField=' + sort.id;
         url += '&sortType=' + sort.sortType;
@@ -122,12 +121,26 @@
         };
     }
 
+    function kpRequest(url, onSuccess, onError) {
+        var xhr = new XMLHttpRequest();
+        xhr.open('GET', url, true);
+        xhr.setRequestHeader('X-API-KEY', API_TOKEN);
+        xhr.setRequestHeader('Content-Type', 'application/json');
+        xhr.onload = function () {
+            if (xhr.status >= 200 && xhr.status < 300) {
+                try { onSuccess(JSON.parse(xhr.responseText)); }
+                catch (e) { onError(); }
+            } else { onError(); }
+        };
+        xhr.onerror = onError;
+        xhr.send();
+    }
+
     function makeRow(sort) {
         return function (callback) {
             var url = buildApiUrl(sort);
-            var net = new Lampa.Reguest();
 
-            net.silent(url, function (data) {
+            kpRequest(url, function (data) {
                 if (!data || !data.docs || !data.docs.length) return callback({ results: [] });
 
                 var results = data.docs.map(kpToLampaCard);
