@@ -6,14 +6,15 @@
     window.plugin_domashniy_ready = true;
 
     var API_TOKEN = '9b8d0eb9-f6d3-46ba-9f38-2a43ba68f18f';
-    var API_BASE = 'https://api.kinopoisk.dev/v1.4/movie';
+    var API_BASE = 'https://kinopoiskapiunofficial.tech/';
     var NETWORK_NAME = 'Домашний';
 
+    // Сортировки: адаптированы под unofficial API
+    // order=RATING, order=NUM_VOTE, order=YEAR
     var allSortOptions = [
-        { id: 'year', title: 'dm_sort_new', sortType: '-1' },
-        { id: 'rating.kp', title: 'dm_sort_rating', sortType: '-1' },
-        { id: 'votes.kp', title: 'dm_sort_votes', sortType: '-1' },
-        { id: 'rating.imdb', title: 'dm_sort_imdb', sortType: '-1' }
+        { id: 'YEAR', title: 'dm_sort_new' },
+        { id: 'RATING', title: 'dm_sort_rating' },
+        { id: 'NUM_VOTE', title: 'dm_sort_votes' }
     ];
 
     var SETTINGS_KEY = 'domashniy_settings';
@@ -83,74 +84,63 @@
         var yearTo = now.getFullYear();
         var yearFrom = yearTo - 3;
 
-        var url = API_BASE + '?page=' + (page || 1) + '&limit=20';
-        url += '&networks.items.name=' + encodeURIComponent(NETWORK_NAME);
-        url += '&sortField=' + sort.id;
-        url += '&sortType=' + sort.sortType;
-        url += '&poster.url=!null';
-        url += '&year=' + yearFrom + '-' + yearTo;
-
-        if (sort.id === 'rating.kp' || sort.id === 'rating.imdb') {
-            url += '&votes.kp=50-5000000';
-        }
+        var url = API_BASE + 'api/v2.2/films?';
+        url += 'order=' + sort.id;
+        url += '&type=ALL';
+        url += '&yearFrom=' + yearFrom;
+        url += '&yearTo=' + yearTo;
+        url += '&keyword=' + encodeURIComponent(NETWORK_NAME);
+        url += '&page=' + (page || 1);
 
         return url;
     }
 
     function kpToLampaCard(item) {
+        var id = item.kinopoiskId || item.filmId || item.id;
+        var title = item.nameRu || item.nameOriginal || item.nameEn || '';
+        var orig = item.nameOriginal || item.nameEn || '';
+        var year = item.year || '';
+        var posterUrl = item.posterUrlPreview || item.posterUrl || '';
+        var rating = item.ratingKinopoisk || item.rating || 0;
+        var votes = item.ratingKinopoiskVoteCount || 0;
+        var isSeries = (item.type === 'TV_SERIES' || item.type === 'MINI_SERIES' || item.type === 'TV_SHOW');
+
         return {
-            id: item.id,
+            id: id,
             source: 'kp',
-            title: item.name || item.alternativeName || '',
-            original_title: item.alternativeName || item.enName || '',
+            title: title,
+            original_title: orig,
             overview: item.description || item.shortDescription || '',
-            poster_path: item.poster ? item.poster.previewUrl || item.poster.url || '' : '',
-            backdrop_path: item.backdrop ? item.backdrop.url || '' : '',
-            vote_average: item.rating ? item.rating.kp || 0 : 0,
-            vote_count: item.votes ? item.votes.kp || 0 : 0,
-            release_date: item.year ? item.year + '' : '',
-            first_air_date: item.year ? item.year + '' : '',
-            genre_ids: (item.genres || []).map(function (g) { return g.name; }),
-            name: item.name || '',
-            original_name: item.alternativeName || item.enName || '',
-            media_type: item.isSeries ? 'tv' : 'movie',
-            img: item.poster ? item.poster.previewUrl || item.poster.url || '' : '',
-            year: item.year,
-            number_of_seasons: item.seasonsInfo ? item.seasonsInfo.length : 0,
-            kinopoisk_id: item.id
+            poster_path: posterUrl,
+            backdrop_path: item.coverUrl || '',
+            vote_average: typeof rating === 'string' ? parseFloat(rating) || 0 : rating || 0,
+            vote_count: votes,
+            release_date: year + '',
+            first_air_date: year + '',
+            genre_ids: (item.genres || []).map(function (g) { return g.genre || g.name || ''; }),
+            name: title,
+            original_name: orig,
+            media_type: isSeries ? 'tv' : 'movie',
+            img: posterUrl,
+            year: year,
+            number_of_seasons: 0,
+            kinopoisk_id: id
         };
     }
 
+    // Запрос через Lampa.Reguest — как в рабочем плагине рейтингов
     function kpRequest(url, onSuccess, onError) {
         var network = new Lampa.Reguest();
         network.timeout(15000);
-
-        // Пробуем через прокси Lampa (если настроен)
-        var proxyUrl = '';
-
-        // Получаем прокси из настроек Lampa (если есть)
-        try {
-            var lampProxy = Lampa.Storage.get('proxy_other', '') || Lampa.Storage.get('proxy', '') || '';
-            if (lampProxy) proxyUrl = lampProxy;
-        } catch(e) {}
-
-        var fullUrl = proxyUrl + url;
-
-        network.silent(fullUrl, function (data) {
-            if (data) onSuccess(data);
+        network.silent(url, function (json) {
+            if (json) onSuccess(json);
             else onError();
-        }, function () {
-            // Фолбэк: пробуем через corsproxy.io
-            var network2 = new Lampa.Reguest();
-            network2.timeout(15000);
-            network2.silent('https://corsproxy.io/?' + encodeURIComponent(url), function (data) {
-                if (data) onSuccess(data);
-                else onError();
-            }, onError, false, {
-                headers: { 'X-API-KEY': API_TOKEN }
-            });
+        }, function (a, c) {
+            onError();
         }, false, {
-            headers: { 'X-API-KEY': API_TOKEN }
+            headers: {
+                'X-API-KEY': API_TOKEN
+            }
         });
     }
 
@@ -159,9 +149,10 @@
             var url = buildApiUrl(sort);
 
             kpRequest(url, function (data) {
-                if (!data || !data.docs || !data.docs.length) return callback({ results: [] });
+                var items = data.items || data.films || [];
+                if (!items.length) return callback({ results: [] });
 
-                var results = data.docs.map(kpToLampaCard);
+                var results = items.map(kpToLampaCard);
                 var t = Lampa.Lang.translate(sort.title) + ' — ' + NETWORK_NAME;
                 registerTitle(t);
 
@@ -174,7 +165,7 @@
         };
     }
 
-    var MAX_ROWS = 4;
+    var MAX_ROWS = 3;
 
     function registerContentRows() {
         for (var i = 0; i < MAX_ROWS; i++) {
