@@ -1,77 +1,25 @@
+
 (function () {
     'use strict';
 
     if (window.plugin_domashniy_ready) return;
     window.plugin_domashniy_ready = true;
 
-    var NETWORK_ID = 1325;
-    var NETWORK_TITLE = 'Домашний';
+    var API_TOKEN = '9b8d0eb9-f6d3-46ba-9f38-2a43ba68f18f';
+    var API_BASE = 'https://api.kinopoisk.dev/v1.4/movie';
+    var NETWORK_NAME = 'Домашний';
 
     var allSortOptions = [
-        { id: 'vote_count.desc', title: 'dm_sort_votes' },
-        { id: 'vote_average.desc', title: 'dm_sort_rating' },
-        { id: 'first_air_date.desc', title: 'dm_sort_new' },
-        { id: 'popularity.desc', title: 'dm_sort_popular' }
+        { id: 'year', title: 'dm_sort_new', sortType: '-1' },
+        { id: 'rating.kp', title: 'dm_sort_rating', sortType: '-1' },
+        { id: 'votes.kp', title: 'dm_sort_votes', sortType: '-1' },
+        { id: 'rating.imdb', title: 'dm_sort_imdb', sortType: '-1' }
     ];
 
-    var logoPending = {};
-    var LOGO_STORAGE_KEY = 'dm_logo_cache';
-    var logoCache = Lampa.Storage.get(LOGO_STORAGE_KEY) || {};
-
-    function saveLogoCache() {
-        Lampa.Storage.set(LOGO_STORAGE_KEY, logoCache);
-    }
-
-    function getLogoUrl(callback) {
-        if (logoCache.hasOwnProperty(NETWORK_ID) && logoCache[NETWORK_ID]) return callback(logoCache[NETWORK_ID]);
-        if (logoPending[NETWORK_ID]) { logoPending[NETWORK_ID].push(callback); return; }
-        logoPending[NETWORK_ID] = [callback];
-
-        var apiUrl = Lampa.TMDB.api('network/' + NETWORK_ID + '?api_key=' + Lampa.TMDB.key());
-        Lampa.Network.silent(apiUrl, function (data) {
-            var url = data && data.logo_path ? Lampa.TMDB.image('t/p/w154' + data.logo_path) : '';
-            logoCache[NETWORK_ID] = url;
-            saveLogoCache();
-            var cbs = logoPending[NETWORK_ID] || [];
-            delete logoPending[NETWORK_ID];
-            cbs.forEach(function (cb) { cb(url); });
-        }, function () {
-            var cbs = logoPending[NETWORK_ID] || [];
-            delete logoPending[NETWORK_ID];
-            cbs.forEach(function (cb) { cb(''); });
-        }, false, { cache: { life: 60 * 24 * 7 } });
-    }
-
     var SETTINGS_KEY = 'domashniy_settings';
-
-    function getSettings() {
-        return Lampa.Storage.get(SETTINGS_KEY) || {};
-    }
-
-    function getSetting(key, def) {
-        var s = getSettings();
-        return s.hasOwnProperty(key) ? s[key] : def;
-    }
-
-    function setSetting(key, value) {
-        var s = getSettings();
-        s[key] = value;
-        Lampa.Storage.set(SETTINGS_KEY, s);
-    }
-
-    var BASE_KW = '346488,158718,41278,13141,345822,315535,290667,323477,290609';
-
-    function buildParams(sort) {
-        var p = '&sort_by=' + sort.id;
-        if (sort.id === 'first_air_date.desc') {
-            var e = new Date(); e.setDate(e.getDate() - 10);
-            var s = new Date(); s.setFullYear(s.getFullYear() - 3);
-            p += '&first_air_date.gte=' + s.toISOString().split('T')[0];
-            p += '&first_air_date.lte=' + e.toISOString().split('T')[0];
-        }
-        p += '&without_keywords=' + encodeURIComponent(BASE_KW);
-        return p;
-    }
+    function getSettings() { return Lampa.Storage.get(SETTINGS_KEY) || {}; }
+    function getSetting(key, def) { var s = getSettings(); return s.hasOwnProperty(key) ? s[key] : def; }
+    function setSetting(key, value) { var s = getSettings(); s[key] = value; Lampa.Storage.set(SETTINGS_KEY, s); }
 
     function getEnabledSorts() {
         var r = allSortOptions.filter(function (s) { return getSetting('sort_' + s.id, true); });
@@ -90,35 +38,24 @@
     function getCurrentRenderList() {
         var now = Date.now();
         if (currentRenderList && (now - renderTimestamp) < 2000) return currentRenderList;
-        var sorts = getEnabledSorts();
-        currentRenderList = shuffle(sorts.slice());
+        currentRenderList = shuffle(getEnabledSorts());
         renderTimestamp = now;
         return currentRenderList;
     }
 
     var titleRegistry = {};
-
-    function registerTitle(titleText) {
-        titleRegistry[titleText] = true;
-    }
+    function registerTitle(titleText) { titleRegistry[titleText] = true; }
 
     function createIconWrap() {
-        var url = logoCache[NETWORK_ID];
         var wrap = $('<span>').css({
             display: 'inline-flex', 'align-items': 'center', 'justify-content': 'center',
             width: '1.9em', height: '1.9em',
             'background-color': 'rgba(255,255,255,0.35)',
             'border-radius': '0.35em', 'margin-right': '0.45em', 'flex-shrink': '0'
         });
-        if (url) {
-            wrap.append($('<img>').attr('src', url).css({
-                width: '1.45em', height: '1.45em', 'object-fit': 'contain', display: 'block'
-            }));
-        } else {
-            wrap.append($('<span>').text('ДМ').css({
-                color: '#fff', 'font-size': '0.5em', 'font-weight': '700'
-            }));
-        }
+        wrap.append($('<span>').text('ДМ').css({
+            color: '#fff', 'font-size': '0.5em', 'font-weight': '700'
+        }));
         return wrap;
     }
 
@@ -135,32 +72,77 @@
     }
 
     var observerStarted = false;
-
     function startObserver() {
         if (observerStarted) return;
         observerStarted = true;
         setInterval(processAllTitles, 500);
     }
 
+    function buildApiUrl(sort, page) {
+        var now = new Date();
+        var yearTo = now.getFullYear();
+        var yearFrom = yearTo - 3;
+
+        var url = API_BASE + '?page=' + (page || 1) + '&limit=20';
+        url += '&networks.items.name=' + encodeURIComponent(NETWORK_NAME);
+        url += '&sortField=' + sort.id;
+        url += '&sortType=' + sort.sortType;
+        url += '&poster.url=!null';
+        url += '&year=' + yearFrom + '-' + yearTo;
+
+        if (sort.id === 'rating.kp' || sort.id === 'rating.imdb') {
+            url += '&votes.kp=50-5000000';
+        }
+
+        return url;
+    }
+
+    function kpToLampaCard(item) {
+        return {
+            id: item.id,
+            source: 'kp',
+            title: item.name || item.alternativeName || '',
+            original_title: item.alternativeName || item.enName || '',
+            overview: item.description || item.shortDescription || '',
+            poster_path: item.poster ? item.poster.previewUrl || item.poster.url || '' : '',
+            backdrop_path: item.backdrop ? item.backdrop.url || '' : '',
+            vote_average: item.rating ? item.rating.kp || 0 : 0,
+            vote_count: item.votes ? item.votes.kp || 0 : 0,
+            release_date: item.year ? item.year + '' : '',
+            first_air_date: item.year ? item.year + '' : '',
+            genre_ids: (item.genres || []).map(function (g) { return g.name; }),
+            name: item.name || '',
+            original_name: item.alternativeName || item.enName || '',
+            media_type: item.isSeries ? 'tv' : 'movie',
+            img: item.poster ? item.poster.previewUrl || item.poster.url || '' : '',
+            year: item.year,
+            number_of_seasons: item.seasonsInfo ? item.seasonsInfo.length : 0,
+            kinopoisk_id: item.id
+        };
+    }
+
     function makeRow(sort) {
-        var baseParams = buildParams(sort);
-        var discoverPath = 'discover/tv?with_networks=' + NETWORK_ID + baseParams;
-
         return function (callback) {
-            var tmdbUrl = Lampa.TMDB.api(discoverPath + '&api_key=' + Lampa.TMDB.key() + '&language=' + Lampa.Storage.get('language', 'ru'));
-            var net = new Lampa.Reguest();
+            var url = buildApiUrl(sort);
 
-            net.silent(tmdbUrl, function (json) {
-                if (!json || !Array.isArray(json.results)) return callback({ results: [] });
-                json.results.forEach(function (item) { if (!item.source) item.source = 'tmdb'; });
-                var t = Lampa.Lang.translate(sort.title) + ' — ' + NETWORK_TITLE;
-                json.title = t;
-                json.url = discoverPath;
-                json.source = 'tmdb';
-                json.nomore = false;
-                registerTitle(t);
-                callback(json);
-            }, function () { callback({ results: [] }); });
+            $.ajax({
+                url: url,
+                headers: { 'X-API-KEY': API_TOKEN },
+                success: function (data) {
+                    if (!data || !data.docs || !data.docs.length) return callback({ results: [] });
+
+                    var results = data.docs.map(kpToLampaCard);
+                    var t = Lampa.Lang.translate(sort.title) + ' — ' + NETWORK_NAME;
+                    registerTitle(t);
+
+                    callback({
+                        results: results,
+                        title: t,
+                        nomore: true
+                    });
+                },
+                error: function () { callback({ results: [] }); }
+            });
         };
     }
 
@@ -188,9 +170,9 @@
         Lampa.Lang.add({
             dm_plugin_title: { ru: 'Домашний', en: 'Domashniy', uk: 'Домашній' },
             dm_sort_votes: { ru: 'Много голосов', en: 'Most Votes', uk: 'Багато голосів' },
-            dm_sort_rating: { ru: 'Высокий рейтинг', en: 'Top Rated', uk: 'Високий рейтинг' },
+            dm_sort_rating: { ru: 'Рейтинг КП', en: 'KP Rating', uk: 'Рейтинг КП' },
             dm_sort_new: { ru: 'Новинки', en: 'New', uk: 'Новинки' },
-            dm_sort_popular: { ru: 'Популярные', en: 'Popular', uk: 'Популярні' },
+            dm_sort_imdb: { ru: 'Рейтинг IMDb', en: 'IMDb Rating', uk: 'Рейтинг IMDb' },
             dm_sort_title: { ru: 'Виды сортировки', en: 'Sorting types', uk: 'Типи сортування' },
             dm_sort_description: { ru: 'Выбор сортировки подборок', en: 'Choose sorting', uk: 'Вибір сортування' }
         });
@@ -218,7 +200,7 @@
         });
     }
 
-    function start() { addLang(); getLogoUrl(function () {}); startObserver(); registerContentRows(); addSettings(); }
+    function start() { addLang(); startObserver(); registerContentRows(); addSettings(); }
 
     if (window.appready) start();
     else Lampa.Listener.follow('app', function (e) { if (e.type === 'ready') start(); });
