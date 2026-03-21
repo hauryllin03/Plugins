@@ -121,57 +121,36 @@
         };
     }
 
-    // CORS-прокси для обхода блокировки браузера
-    var CORS_PROXIES = [
-        'https://cors.lampa.stream/',
-        'https://corsproxy.io/?',
-        'https://api.allorigins.win/raw?url='
-    ];
-
-    function getProxy() {
-        return getSetting('cors_proxy', CORS_PROXIES[0]);
-    }
-
     function kpRequest(url, onSuccess, onError) {
-        // Добавляем токен в URL вместо заголовка — убираем preflight
-        var separator = url.indexOf('?') !== -1 ? '&' : '?';
-        var fullUrl = url + separator + 'token=' + API_TOKEN;
+        var network = new Lampa.Reguest();
+        network.timeout(15000);
 
-        var proxyUrl = getProxy() + encodeURIComponent(fullUrl);
+        // Пробуем через прокси Lampa (если настроен)
+        var proxyUrl = '';
 
-        $.ajax({
-            url: proxyUrl,
-            type: 'GET',
-            dataType: 'json',
-            timeout: 15000,
-            success: function (data) {
+        // Получаем прокси из настроек Lampa (если есть)
+        try {
+            var lampProxy = Lampa.Storage.get('proxy_other', '') || Lampa.Storage.get('proxy', '') || '';
+            if (lampProxy) proxyUrl = lampProxy;
+        } catch(e) {}
+
+        var fullUrl = proxyUrl + url;
+
+        network.silent(fullUrl, function (data) {
+            if (data) onSuccess(data);
+            else onError();
+        }, function () {
+            // Фолбэк: пробуем через corsproxy.io
+            var network2 = new Lampa.Reguest();
+            network2.timeout(15000);
+            network2.silent('https://corsproxy.io/?' + encodeURIComponent(url), function (data) {
                 if (data) onSuccess(data);
                 else onError();
-            },
-            error: function () {
-                // Пробуем следующий прокси
-                var currentProxy = getProxy();
-                var idx = CORS_PROXIES.indexOf(currentProxy);
-                var nextIdx = (idx + 1) % CORS_PROXIES.length;
-
-                if (nextIdx !== 0) {
-                    setSetting('cors_proxy', CORS_PROXIES[nextIdx]);
-                    var retryUrl = CORS_PROXIES[nextIdx] + encodeURIComponent(fullUrl);
-                    $.ajax({
-                        url: retryUrl,
-                        type: 'GET',
-                        dataType: 'json',
-                        timeout: 15000,
-                        success: function (data) {
-                            if (data) onSuccess(data);
-                            else onError();
-                        },
-                        error: onError
-                    });
-                } else {
-                    onError();
-                }
-            }
+            }, onError, false, {
+                headers: { 'X-API-KEY': API_TOKEN }
+            });
+        }, false, {
+            headers: { 'X-API-KEY': API_TOKEN }
         });
     }
 
