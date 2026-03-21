@@ -121,28 +121,58 @@
         };
     }
 
+    // CORS-прокси для обхода блокировки браузера
+    var CORS_PROXIES = [
+        'https://cors.lampa.stream/',
+        'https://corsproxy.io/?',
+        'https://api.allorigins.win/raw?url='
+    ];
+
+    function getProxy() {
+        return getSetting('cors_proxy', CORS_PROXIES[0]);
+    }
+
     function kpRequest(url, onSuccess, onError) {
-        // Добавляем токен как query-параметр вместо заголовка, чтобы избежать preflight-запроса
+        // Добавляем токен в URL вместо заголовка — убираем preflight
         var separator = url.indexOf('?') !== -1 ? '&' : '?';
         var fullUrl = url + separator + 'token=' + API_TOKEN;
 
-        // Используем встроенный прокси Lampa для обхода CORS
-        if (typeof Lampa !== 'undefined' && Lampa.Reguest) {
-            var network = new Lampa.Reguest();
-            network.timeout(15000);
-            network.silent(fullUrl, function (data) {
-                onSuccess(data);
-            }, onError);
-        } else {
-            // Фолбэк: простой fetch без кастомных заголовков (без preflight)
-            $.ajax({
-                url: fullUrl,
-                type: 'GET',
-                dataType: 'json',
-                success: onSuccess,
-                error: onError
-            });
-        }
+        var proxyUrl = getProxy() + encodeURIComponent(fullUrl);
+
+        $.ajax({
+            url: proxyUrl,
+            type: 'GET',
+            dataType: 'json',
+            timeout: 15000,
+            success: function (data) {
+                if (data) onSuccess(data);
+                else onError();
+            },
+            error: function () {
+                // Пробуем следующий прокси
+                var currentProxy = getProxy();
+                var idx = CORS_PROXIES.indexOf(currentProxy);
+                var nextIdx = (idx + 1) % CORS_PROXIES.length;
+
+                if (nextIdx !== 0) {
+                    setSetting('cors_proxy', CORS_PROXIES[nextIdx]);
+                    var retryUrl = CORS_PROXIES[nextIdx] + encodeURIComponent(fullUrl);
+                    $.ajax({
+                        url: retryUrl,
+                        type: 'GET',
+                        dataType: 'json',
+                        timeout: 15000,
+                        success: function (data) {
+                            if (data) onSuccess(data);
+                            else onError();
+                        },
+                        error: onError
+                    });
+                } else {
+                    onError();
+                }
+            }
+        });
     }
 
     function makeRow(sort) {
