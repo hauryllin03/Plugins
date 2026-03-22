@@ -5,14 +5,14 @@
     if (window.plugin_domashniy_ready) return;
     window.plugin_domashniy_ready = true;
 
-    var KP_TOKEN = '893c2bd3-ce87-4d94-8d02-5fb59de15214';
-    var KP_BASE = 'https://kinopoiskapiunofficial.tech/';
+    var NETWORK_ID = 1325; // Домашний на TMDB
     var NETWORK_NAME = 'Домашний';
 
     var allSortOptions = [
-        { id: 'YEAR', title: 'dm_sort_new' },
-        { id: 'RATING', title: 'dm_sort_rating' },
-        { id: 'NUM_VOTE', title: 'dm_sort_votes' }
+        { id: 'first_air_date.desc', title: 'dm_sort_new' },
+        { id: 'vote_average.desc', title: 'dm_sort_rating' },
+        { id: 'vote_count.desc', title: 'dm_sort_votes' },
+        { id: 'popularity.desc', title: 'dm_sort_popular' }
     ];
 
     var SETTINGS_KEY = 'domashniy_settings';
@@ -77,177 +77,64 @@
         setInterval(processAllTitles, 500);
     }
 
-    // Получаем TMDB api_key из Lampa
-    function getTmdbKey() {
-        try {
-            // Lampa хранит ключ в разных местах в зависимости от версии
-            if (Lampa.TMDB.key) return Lampa.TMDB.key;
-            if (Lampa.Manifest && Lampa.Manifest.tmdb_key) return Lampa.Manifest.tmdb_key;
-            // Пробуем извлечь из существующего API-вызова
-            var testUrl = Lampa.TMDB.api('');
-            var match = testUrl.match(/api_key=([^&]+)/);
-            if (match) return match[1];
-        } catch(e) {}
-        return '4ef0d7355d9ffb5151e987764708ce96'; // публичный TMDB ключ
-    }
+    function buildDiscoverUrl(sort, page) {
+        var params = 'discover/tv?';
+        params += 'with_networks=' + NETWORK_ID;
+        params += '&sort_by=' + sort.id;
+        params += '&language=ru';
+        params += '&page=' + (page || 1);
 
-    // Формируем TMDB URL с гарантированным api_key
-    function tmdbSearchUrl(path) {
-        var url = Lampa.TMDB.api(path);
-        // Проверяем есть ли api_key в URL
-        if (url.indexOf('api_key=') === -1) {
-            var sep = url.indexOf('?') !== -1 ? '&' : '?';
-            url += sep + 'api_key=' + getTmdbKey();
+        // Для сортировки по рейтингу — фильтруем минимум голосов
+        if (sort.id === 'vote_average.desc') {
+            params += '&vote_count.gte=10';
         }
-        return url;
+
+        return Lampa.TMDB.api(params);
     }
 
-    function buildKpUrl(sort, page) {
-        var now = new Date();
-        var yearTo = now.getFullYear();
-        var yearFrom = yearTo - 3;
-
-        var url = KP_BASE + 'api/v2.2/films?';
-        url += 'order=' + sort.id;
-        url += '&type=ALL';
-        url += '&yearFrom=' + yearFrom;
-        url += '&yearTo=' + yearTo;
-        url += '&keyword=' + encodeURIComponent(NETWORK_NAME);
-        url += '&page=' + (page || 1);
-
-        return url;
-    }
-
-    function kpRequest(url, onSuccess, onError) {
-        var network = new Lampa.Reguest();
-        network.timeout(15000);
-        network.silent(url, function (json) {
-            if (json) onSuccess(json);
-            else onError();
-        }, function () {
-            onError();
-        }, false, {
-            headers: { 'X-API-KEY': KP_TOKEN }
-        });
-    }
-
-    // Ищем фильм/сериал в TMDB
-    function searchTmdb(title, origTitle, year, isSeries, callback) {
-        var type = isSeries ? 'tv' : 'movie';
-        var query = origTitle || title;
-        var yearParam = year ? (isSeries ? '&first_air_date_year=' + year : '&year=' + year) : '';
-
-        var url = tmdbSearchUrl('search/' + type + '?query=' + encodeURIComponent(query) + '&language=ru&page=1' + yearParam);
-
-        var network = new Lampa.Reguest();
-        network.timeout(8000);
-        network.silent(url, function (data) {
-            if (data && data.results && data.results.length) {
-                var item = data.results[0];
-                if (year) {
-                    for (var i = 0; i < data.results.length; i++) {
-                        var r = data.results[i];
-                        var rYear = (r.release_date || r.first_air_date || '').slice(0, 4);
-                        if (rYear === (year + '')) { item = r; break; }
-                    }
-                }
-                item.media_type = type;
-                callback(item);
-            } else if (query === origTitle && title && title !== origTitle) {
-                // Пробуем по русскому названию
-                var url2 = tmdbSearchUrl('search/' + type + '?query=' + encodeURIComponent(title) + '&language=ru&page=1' + yearParam);
-                network.silent(url2, function (data2) {
-                    if (data2 && data2.results && data2.results.length) {
-                        data2.results[0].media_type = type;
-                        callback(data2.results[0]);
-                    } else {
-                        tryOtherType(title, year, isSeries, callback);
-                    }
-                }, function () { callback(null); });
-            } else {
-                tryOtherType(title, year, isSeries, callback);
-            }
-        }, function () { callback(null); });
-    }
-
-    function tryOtherType(title, year, wasSeries, callback) {
-        var type = wasSeries ? 'movie' : 'tv';
-        var yearParam = year ? (wasSeries ? '&year=' + year : '&first_air_date_year=' + year) : '';
-        var url = tmdbSearchUrl('search/' + type + '?query=' + encodeURIComponent(title) + '&language=ru&page=1' + yearParam);
-
-        var network = new Lampa.Reguest();
-        network.timeout(8000);
-        network.silent(url, function (data) {
-            if (data && data.results && data.results.length) {
-                data.results[0].media_type = type;
-                callback(data.results[0]);
-            } else {
-                callback(null);
-            }
-        }, function () { callback(null); });
-    }
-
-    function tmdbToLampaCard(tmdb, kpRating) {
-        var isTV = tmdb.media_type === 'tv';
+    function tmdbToLampaCard(item) {
         return {
-            id: tmdb.id,
+            id: item.id,
             source: 'tmdb',
-            title: tmdb.title || tmdb.name || '',
-            original_title: tmdb.original_title || tmdb.original_name || '',
-            overview: tmdb.overview || '',
-            poster_path: tmdb.poster_path || '',
-            backdrop_path: tmdb.backdrop_path || '',
-            vote_average: kpRating || tmdb.vote_average || 0,
-            vote_count: tmdb.vote_count || 0,
-            release_date: tmdb.release_date || '',
-            first_air_date: tmdb.first_air_date || '',
-            genre_ids: tmdb.genre_ids || [],
-            name: tmdb.name || tmdb.title || '',
-            original_name: tmdb.original_name || tmdb.original_title || '',
-            media_type: isTV ? 'tv' : 'movie'
+            title: item.name || item.original_name || '',
+            original_title: item.original_name || '',
+            overview: item.overview || '',
+            poster_path: item.poster_path || '',
+            backdrop_path: item.backdrop_path || '',
+            vote_average: item.vote_average || 0,
+            vote_count: item.vote_count || 0,
+            release_date: item.first_air_date || '',
+            first_air_date: item.first_air_date || '',
+            genre_ids: item.genre_ids || [],
+            name: item.name || '',
+            original_name: item.original_name || '',
+            media_type: 'tv'
         };
     }
 
     function makeRow(sort) {
         return function (callback) {
-            var url = buildKpUrl(sort);
+            var url = buildDiscoverUrl(sort);
 
-            kpRequest(url, function (data) {
-                var kpItems = data.items || data.films || [];
-                if (!kpItems.length) return callback({ results: [] });
+            var network = new Lampa.Reguest();
+            network.timeout(15000);
+            network.silent(url, function (data) {
+                if (!data || !data.results || !data.results.length) return callback({ results: [] });
 
-                var results = [];
-                var pending = kpItems.length;
+                var results = data.results.map(tmdbToLampaCard);
+                var t = Lampa.Lang.translate(sort.title) + ' — ' + NETWORK_NAME;
+                registerTitle(t);
 
-                kpItems.forEach(function (kpItem) {
-                    var title = kpItem.nameRu || kpItem.nameOriginal || kpItem.nameEn || '';
-                    var orig = kpItem.nameOriginal || kpItem.nameEn || '';
-                    var year = kpItem.year || '';
-                    var isSeries = (kpItem.type === 'TV_SERIES' || kpItem.type === 'MINI_SERIES' || kpItem.type === 'TV_SHOW');
-                    var kpRating = kpItem.ratingKinopoisk || 0;
-
-                    searchTmdb(title, orig, year, isSeries, function (tmdbItem) {
-                        if (tmdbItem) {
-                            results.push(tmdbToLampaCard(tmdbItem, kpRating));
-                        }
-                        pending--;
-                        if (pending <= 0) {
-                            var t = Lampa.Lang.translate(sort.title) + ' — ' + NETWORK_NAME;
-                            registerTitle(t);
-
-                            callback({
-                                results: results,
-                                title: t,
-                                nomore: true
-                            });
-                        }
-                    });
+                callback({
+                    results: results,
+                    title: t,
+                    nomore: true
                 });
             }, function () { callback({ results: [] }); });
         };
     }
 
-    var MAX_ROWS = 3;
+    var MAX_ROWS = 4;
 
     function registerContentRows() {
         for (var i = 0; i < MAX_ROWS; i++) {
@@ -273,7 +160,7 @@
             dm_sort_votes: { ru: 'Много голосов', en: 'Most Votes', uk: 'Багато голосів' },
             dm_sort_rating: { ru: 'Рейтинг КП', en: 'KP Rating', uk: 'Рейтинг КП' },
             dm_sort_new: { ru: 'Новинки', en: 'New', uk: 'Новинки' },
-            dm_sort_imdb: { ru: 'Рейтинг IMDb', en: 'IMDb Rating', uk: 'Рейтинг IMDb' },
+            dm_sort_popular: { ru: 'Популярные', en: 'Popular', uk: 'Популярні' },
             dm_sort_title: { ru: 'Виды сортировки', en: 'Sorting types', uk: 'Типи сортування' },
             dm_sort_description: { ru: 'Выбор сортировки подборок', en: 'Choose sorting', uk: 'Вибір сортування' }
         });
