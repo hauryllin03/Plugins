@@ -5,12 +5,10 @@
     if (window.plugin_domashniy_ready) return;
     window.plugin_domashniy_ready = true;
 
-    var API_TOKEN = '9b8d0eb9-f6d3-46ba-9f38-2a43ba68f18f';
+    var API_TOKEN = '893c2bd3-ce87-4d94-8d02-5fb59de15214';
     var API_BASE = 'https://kinopoiskapiunofficial.tech/';
     var NETWORK_NAME = 'Домашний';
 
-    // Сортировки: адаптированы под unofficial API
-    // order=RATING, order=NUM_VOTE, order=YEAR
     var allSortOptions = [
         { id: 'YEAR', title: 'dm_sort_new' },
         { id: 'RATING', title: 'dm_sort_rating' },
@@ -95,6 +93,50 @@
         return url;
     }
 
+    // Ищем TMDB id по названию фильма, чтобы карточка открывалась
+    function findTmdbId(title, year, mediaType, callback) {
+        var type = mediaType === 'tv' ? 'tv' : 'movie';
+        var searchUrl = Lampa.TMDB.api('search/' + type + '?query=' + encodeURIComponent(title) + '&language=ru&page=1' + (year ? '&year=' + year : ''));
+
+        var network = new Lampa.Reguest();
+        network.timeout(10000);
+        network.silent(searchUrl, function (data) {
+            if (data && data.results && data.results.length) {
+                // Пробуем найти точное совпадение по году
+                var match = null;
+                if (year) {
+                    match = data.results.find(function (r) {
+                        var rYear = (r.release_date || r.first_air_date || '').slice(0, 4);
+                        return rYear === (year + '');
+                    });
+                }
+                callback(match || data.results[0]);
+            } else if (type === 'tv') {
+                // Если не нашли как сериал, пробуем как фильм
+                var searchUrl2 = Lampa.TMDB.api('search/movie?query=' + encodeURIComponent(title) + '&language=ru&page=1' + (year ? '&year=' + year : ''));
+                network.silent(searchUrl2, function (data2) {
+                    if (data2 && data2.results && data2.results.length) {
+                        callback(data2.results[0]);
+                    } else {
+                        callback(null);
+                    }
+                }, function () { callback(null); });
+            } else {
+                // Если не нашли как фильм, пробуем как сериал
+                var searchUrl3 = Lampa.TMDB.api('search/tv?query=' + encodeURIComponent(title) + '&language=ru&page=1' + (year ? '&first_air_date_year=' + year : ''));
+                network.silent(searchUrl3, function (data3) {
+                    if (data3 && data3.results && data3.results.length) {
+                        var r = data3.results[0];
+                        r.media_type = 'tv';
+                        callback(r);
+                    } else {
+                        callback(null);
+                    }
+                }, function () { callback(null); });
+            }
+        }, function () { callback(null); });
+    }
+
     function kpToLampaCard(item) {
         var id = item.kinopoiskId || item.filmId || item.id;
         var title = item.nameRu || item.nameOriginal || item.nameEn || '';
@@ -111,6 +153,7 @@
             title: title,
             original_title: orig,
             overview: item.description || item.shortDescription || '',
+            // Постеры — полные URL напрямую с КП, не через TMDB прокси
             poster_path: posterUrl,
             backdrop_path: item.coverUrl || '',
             vote_average: typeof rating === 'string' ? parseFloat(rating) || 0 : rating || 0,
@@ -121,14 +164,16 @@
             name: title,
             original_name: orig,
             media_type: isSeries ? 'tv' : 'movie',
+            // img — полный URL, Lampa покажет его напрямую
             img: posterUrl,
             year: year,
             number_of_seasons: 0,
-            kinopoisk_id: id
+            kinopoisk_id: id,
+            // Помечаем как КП-карточку для перехвата
+            dm_source: true
         };
     }
 
-    // Запрос через Lampa.Reguest — как в рабочем плагине рейтингов
     function kpRequest(url, onSuccess, onError) {
         var network = new Lampa.Reguest();
         network.timeout(15000);
@@ -185,6 +230,54 @@
         }
     }
 
+    // Перехватываем клик по карточке — ищем в TMDB и открываем правильно
+    function interceptCardClick() {
+        Lampa.Listener.follow('full', function (e) {
+            if (e.type === 'start') {
+                var card = e.data && e.data.movie;
+                if (!card || !card.dm_source) return;
+
+                // Останавливаем загрузку — будем искать в TMDB
+                e.preventDefault && e.preventDefault();
+            }
+        });
+
+        // Перехватываем открытие карточки
+        var originalActivity = Lampa.Activity.push;
+        Lampa.Activity.push = function (obj) {
+            var card = obj && obj.movie;
+            if (card && card.dm_source && card.source === 'kp') {
+                // Ищем в TMDB по названию
+                Lampa.Noty.show('Ищем в TMDB: ' + card.title);
+
+                findTmdbId(card.title, card.year, card.media_type, function (tmdbItem) {
+                    if (tmdbItem) {
+                        // Подменяем данные на TMDB
+                        var newCard = Object.assign({}, tmdbItem);
+                        newCard.source = 'tmdb';
+                        newCard.media_type = tmdbItem.media_type || card.media_type;
+                        if (!newCard.title) newCard.title = tmdbItem.name || card.title;
+                        if (!newCard.original_title) newCard.original_title = tmdbItem.original_name || card.original_title;
+                        delete newCard.dm_source;
+
+                        obj.movie = newCard;
+                        obj.id = newCard.id;
+                        originalActivity.call(Lampa.Activity, obj);
+                    } else {
+                        Lampa.Noty.show('Не найдено в TMDB');
+                        // Открываем как есть — пусть Lampa попробует
+                        delete card.dm_source;
+                        originalActivity.call(Lampa.Activity, obj);
+                    }
+                });
+
+                return;
+            }
+
+            originalActivity.call(Lampa.Activity, obj);
+        };
+    }
+
     function addLang() {
         Lampa.Lang.add({
             dm_plugin_title: { ru: 'Домашний', en: 'Domashniy', uk: 'Домашній' },
@@ -219,7 +312,13 @@
         });
     }
 
-    function start() { addLang(); startObserver(); registerContentRows(); addSettings(); }
+    function start() {
+        addLang();
+        startObserver();
+        registerContentRows();
+        addSettings();
+        interceptCardClick();
+    }
 
     if (window.appready) start();
     else Lampa.Listener.follow('app', function (e) { if (e.type === 'ready') start(); });
