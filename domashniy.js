@@ -5,14 +5,15 @@
     if (window.plugin_domashniy_ready) return;
     window.plugin_domashniy_ready = true;
 
-    var NETWORK_ID = 1325; // Домашний на TMDB
+    var API_TOKEN = '9b8d0eb9-f6d3-46ba-9f38-2a43ba68f18f';
+    var API_BASE = 'https://api.kinopoisk.dev/v1.4/movie';
     var NETWORK_NAME = 'Домашний';
 
     var allSortOptions = [
-        { id: 'first_air_date.desc', title: 'dm_sort_new' },
-        { id: 'vote_average.desc', title: 'dm_sort_rating' },
-        { id: 'vote_count.desc', title: 'dm_sort_votes' },
-        { id: 'popularity.desc', title: 'dm_sort_popular' }
+        { id: 'year', title: 'dm_sort_new', sortType: '-1' },
+        { id: 'rating.kp', title: 'dm_sort_rating', sortType: '-1' },
+        { id: 'votes.kp', title: 'dm_sort_votes', sortType: '-1' },
+        { id: 'rating.imdb', title: 'dm_sort_imdb', sortType: '-1' }
     ];
 
     var SETTINGS_KEY = 'domashniy_settings';
@@ -77,51 +78,72 @@
         setInterval(processAllTitles, 500);
     }
 
-    function buildDiscoverUrl(sort, page) {
-        var params = 'discover/tv?';
-        params += 'with_networks=' + NETWORK_ID;
-        params += '&sort_by=' + sort.id;
-        params += '&language=ru';
-        params += '&page=' + (page || 1);
+    function buildApiUrl(sort, page) {
+        var now = new Date();
+        var yearTo = now.getFullYear();
+        var yearFrom = yearTo - 3;
 
-        // Для сортировки по рейтингу — фильтруем минимум голосов
-        if (sort.id === 'vote_average.desc') {
-            params += '&vote_count.gte=10';
+        var url = API_BASE + '?page=' + (page || 1) + '&limit=20';
+        url += '&networks.items.name=' + encodeURIComponent(NETWORK_NAME);
+        url += '&sortField=' + sort.id;
+        url += '&sortType=' + sort.sortType;
+        url += '&poster.url=!null';
+        url += '&year=' + yearFrom + '-' + yearTo;
+
+        if (sort.id === 'rating.kp' || sort.id === 'rating.imdb') {
+            url += '&votes.kp=50-5000000';
         }
 
-        return Lampa.TMDB.api(params);
+        return url;
     }
 
-    function tmdbToLampaCard(item) {
+    function kpToLampaCard(item) {
         return {
             id: item.id,
-            source: 'tmdb',
-            title: item.name || item.original_name || '',
-            original_title: item.original_name || '',
-            overview: item.overview || '',
-            poster_path: item.poster_path || '',
-            backdrop_path: item.backdrop_path || '',
-            vote_average: item.vote_average || 0,
-            vote_count: item.vote_count || 0,
-            release_date: item.first_air_date || '',
-            first_air_date: item.first_air_date || '',
-            genre_ids: item.genre_ids || [],
+            source: 'kp',
+            title: item.name || item.alternativeName || '',
+            original_title: item.alternativeName || item.enName || '',
+            overview: item.description || item.shortDescription || '',
+            poster_path: item.poster ? item.poster.previewUrl || item.poster.url || '' : '',
+            backdrop_path: item.backdrop ? item.backdrop.url || '' : '',
+            vote_average: item.rating ? item.rating.kp || 0 : 0,
+            vote_count: item.votes ? item.votes.kp || 0 : 0,
+            release_date: item.year ? item.year + '' : '',
+            first_air_date: item.year ? item.year + '' : '',
+            genre_ids: (item.genres || []).map(function (g) { return g.name; }),
             name: item.name || '',
-            original_name: item.original_name || '',
-            media_type: 'tv'
+            original_name: item.alternativeName || item.enName || '',
+            media_type: item.isSeries ? 'tv' : 'movie',
+            img: item.poster ? item.poster.previewUrl || item.poster.url || '' : '',
+            year: item.year,
+            number_of_seasons: item.seasonsInfo ? item.seasonsInfo.length : 0,
+            kinopoisk_id: item.id
         };
+    }
+
+    function kpRequest(url, onSuccess, onError) {
+        var xhr = new XMLHttpRequest();
+        xhr.open('GET', url, true);
+        xhr.setRequestHeader('X-API-KEY', API_TOKEN);
+        xhr.setRequestHeader('Content-Type', 'application/json');
+        xhr.onload = function () {
+            if (xhr.status >= 200 && xhr.status < 300) {
+                try { onSuccess(JSON.parse(xhr.responseText)); }
+                catch (e) { onError(); }
+            } else { onError(); }
+        };
+        xhr.onerror = onError;
+        xhr.send();
     }
 
     function makeRow(sort) {
         return function (callback) {
-            var url = buildDiscoverUrl(sort);
+            var url = buildApiUrl(sort);
 
-            var network = new Lampa.Reguest();
-            network.timeout(15000);
-            network.silent(url, function (data) {
-                if (!data || !data.results || !data.results.length) return callback({ results: [] });
+            kpRequest(url, function (data) {
+                if (!data || !data.docs || !data.docs.length) return callback({ results: [] });
 
-                var results = data.results.map(tmdbToLampaCard);
+                var results = data.docs.map(kpToLampaCard);
                 var t = Lampa.Lang.translate(sort.title) + ' — ' + NETWORK_NAME;
                 registerTitle(t);
 
@@ -160,7 +182,7 @@
             dm_sort_votes: { ru: 'Много голосов', en: 'Most Votes', uk: 'Багато голосів' },
             dm_sort_rating: { ru: 'Рейтинг КП', en: 'KP Rating', uk: 'Рейтинг КП' },
             dm_sort_new: { ru: 'Новинки', en: 'New', uk: 'Новинки' },
-            dm_sort_popular: { ru: 'Популярные', en: 'Popular', uk: 'Популярні' },
+            dm_sort_imdb: { ru: 'Рейтинг IMDb', en: 'IMDb Rating', uk: 'Рейтинг IMDb' },
             dm_sort_title: { ru: 'Виды сортировки', en: 'Sorting types', uk: 'Типи сортування' },
             dm_sort_description: { ru: 'Выбор сортировки подборок', en: 'Choose sorting', uk: 'Вибір сортування' }
         });
@@ -188,12 +210,7 @@
         });
     }
 
-    function start() {
-        addLang();
-        startObserver();
-        registerContentRows();
-        addSettings();
-    }
+    function start() { addLang(); startObserver(); registerContentRows(); addSettings(); }
 
     if (window.appready) start();
     else Lampa.Listener.follow('app', function (e) { if (e.type === 'ready') start(); });
