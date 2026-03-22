@@ -5,8 +5,8 @@
     if (window.plugin_domashniy_ready) return;
     window.plugin_domashniy_ready = true;
 
-    var API_TOKEN = '893c2bd3-ce87-4d94-8d02-5fb59de15214';
-    var API_BASE = 'https://kinopoiskapiunofficial.tech/';
+    var KP_TOKEN = '893c2bd3-ce87-4d94-8d02-5fb59de15214';
+    var KP_BASE = 'https://kinopoiskapiunofficial.tech/';
     var NETWORK_NAME = 'Домашний';
 
     var allSortOptions = [
@@ -77,12 +77,12 @@
         setInterval(processAllTitles, 500);
     }
 
-    function buildApiUrl(sort, page) {
+    function buildKpUrl(sort, page) {
         var now = new Date();
         var yearTo = now.getFullYear();
         var yearFrom = yearTo - 3;
 
-        var url = API_BASE + 'api/v2.2/films?';
+        var url = KP_BASE + 'api/v2.2/films?';
         url += 'order=' + sort.id;
         url += '&type=ALL';
         url += '&yearFrom=' + yearFrom;
@@ -93,118 +93,133 @@
         return url;
     }
 
-    // Ищем TMDB id по названию фильма, чтобы карточка открывалась
-    function findTmdbId(title, year, mediaType, callback) {
-        var type = mediaType === 'tv' ? 'tv' : 'movie';
-        var searchUrl = Lampa.TMDB.api('search/' + type + '?query=' + encodeURIComponent(title) + '&language=ru&page=1' + (year ? '&year=' + year : ''));
-
-        var network = new Lampa.Reguest();
-        network.timeout(10000);
-        network.silent(searchUrl, function (data) {
-            if (data && data.results && data.results.length) {
-                // Пробуем найти точное совпадение по году
-                var match = null;
-                if (year) {
-                    match = data.results.find(function (r) {
-                        var rYear = (r.release_date || r.first_air_date || '').slice(0, 4);
-                        return rYear === (year + '');
-                    });
-                }
-                callback(match || data.results[0]);
-            } else if (type === 'tv') {
-                // Если не нашли как сериал, пробуем как фильм
-                var searchUrl2 = Lampa.TMDB.api('search/movie?query=' + encodeURIComponent(title) + '&language=ru&page=1' + (year ? '&year=' + year : ''));
-                network.silent(searchUrl2, function (data2) {
-                    if (data2 && data2.results && data2.results.length) {
-                        callback(data2.results[0]);
-                    } else {
-                        callback(null);
-                    }
-                }, function () { callback(null); });
-            } else {
-                // Если не нашли как фильм, пробуем как сериал
-                var searchUrl3 = Lampa.TMDB.api('search/tv?query=' + encodeURIComponent(title) + '&language=ru&page=1' + (year ? '&first_air_date_year=' + year : ''));
-                network.silent(searchUrl3, function (data3) {
-                    if (data3 && data3.results && data3.results.length) {
-                        var r = data3.results[0];
-                        r.media_type = 'tv';
-                        callback(r);
-                    } else {
-                        callback(null);
-                    }
-                }, function () { callback(null); });
-            }
-        }, function () { callback(null); });
-    }
-
-    function kpToLampaCard(item) {
-        var id = item.kinopoiskId || item.filmId || item.id;
-        var title = item.nameRu || item.nameOriginal || item.nameEn || '';
-        var orig = item.nameOriginal || item.nameEn || '';
-        var year = item.year || '';
-        var posterUrl = item.posterUrlPreview || item.posterUrl || '';
-        var rating = item.ratingKinopoisk || item.rating || 0;
-        var votes = item.ratingKinopoiskVoteCount || 0;
-        var isSeries = (item.type === 'TV_SERIES' || item.type === 'MINI_SERIES' || item.type === 'TV_SHOW');
-
-        return {
-            id: id,
-            source: 'kp',
-            title: title,
-            original_title: orig,
-            overview: item.description || item.shortDescription || '',
-            // Постеры — полные URL напрямую с КП, не через TMDB прокси
-            poster_path: posterUrl,
-            backdrop_path: item.coverUrl || '',
-            vote_average: typeof rating === 'string' ? parseFloat(rating) || 0 : rating || 0,
-            vote_count: votes,
-            release_date: year + '',
-            first_air_date: year + '',
-            genre_ids: (item.genres || []).map(function (g) { return g.genre || g.name || ''; }),
-            name: title,
-            original_name: orig,
-            media_type: isSeries ? 'tv' : 'movie',
-            // img — полный URL, Lampa покажет его напрямую
-            img: posterUrl,
-            year: year,
-            number_of_seasons: 0,
-            kinopoisk_id: id,
-            // Помечаем как КП-карточку для перехвата
-            dm_source: true
-        };
-    }
-
     function kpRequest(url, onSuccess, onError) {
         var network = new Lampa.Reguest();
         network.timeout(15000);
         network.silent(url, function (json) {
             if (json) onSuccess(json);
             else onError();
-        }, function (a, c) {
+        }, function () {
             onError();
         }, false, {
-            headers: {
-                'X-API-KEY': API_TOKEN
-            }
+            headers: { 'X-API-KEY': KP_TOKEN }
         });
+    }
+
+    // Ищем фильм/сериал в TMDB и возвращаем готовую Lampa-карточку
+    function searchTmdb(title, origTitle, year, isSeries, callback) {
+        var type = isSeries ? 'tv' : 'movie';
+        var query = origTitle || title;
+        var yearParam = year ? (isSeries ? '&first_air_date_year=' + year : '&year=' + year) : '';
+
+        var url = Lampa.TMDB.api('search/' + type + '?query=' + encodeURIComponent(query) + '&language=ru&page=1' + yearParam);
+
+        var network = new Lampa.Reguest();
+        network.timeout(8000);
+        network.silent(url, function (data) {
+            if (data && data.results && data.results.length) {
+                var item = data.results[0];
+                // Пробуем найти точное совпадение по году
+                if (year) {
+                    for (var i = 0; i < data.results.length; i++) {
+                        var r = data.results[i];
+                        var rYear = (r.release_date || r.first_air_date || '').slice(0, 4);
+                        if (rYear === (year + '')) { item = r; break; }
+                    }
+                }
+                item.media_type = type;
+                callback(item);
+            } else if (query === origTitle && title && title !== origTitle) {
+                // Пробуем по русскому названию
+                var url2 = Lampa.TMDB.api('search/' + type + '?query=' + encodeURIComponent(title) + '&language=ru&page=1' + yearParam);
+                network.silent(url2, function (data2) {
+                    if (data2 && data2.results && data2.results.length) {
+                        data2.results[0].media_type = type;
+                        callback(data2.results[0]);
+                    } else {
+                        // Пробуем другой тип
+                        tryOtherType(title, year, isSeries, callback);
+                    }
+                }, function () { callback(null); });
+            } else {
+                tryOtherType(title, year, isSeries, callback);
+            }
+        }, function () { callback(null); });
+    }
+
+    function tryOtherType(title, year, wasSeries, callback) {
+        var type = wasSeries ? 'movie' : 'tv';
+        var yearParam = year ? (wasSeries ? '&year=' + year : '&first_air_date_year=' + year) : '';
+        var url = Lampa.TMDB.api('search/' + type + '?query=' + encodeURIComponent(title) + '&language=ru&page=1' + yearParam);
+
+        var network = new Lampa.Reguest();
+        network.timeout(8000);
+        network.silent(url, function (data) {
+            if (data && data.results && data.results.length) {
+                data.results[0].media_type = type;
+                callback(data.results[0]);
+            } else {
+                callback(null);
+            }
+        }, function () { callback(null); });
+    }
+
+    // Конвертируем TMDB-результат в стандартную Lampa-карточку
+    function tmdbToLampaCard(tmdb, kpRating) {
+        var isTV = tmdb.media_type === 'tv';
+        return {
+            id: tmdb.id,
+            source: 'tmdb',
+            title: tmdb.title || tmdb.name || '',
+            original_title: tmdb.original_title || tmdb.original_name || '',
+            overview: tmdb.overview || '',
+            poster_path: tmdb.poster_path || '',
+            backdrop_path: tmdb.backdrop_path || '',
+            vote_average: kpRating || tmdb.vote_average || 0,
+            vote_count: tmdb.vote_count || 0,
+            release_date: tmdb.release_date || '',
+            first_air_date: tmdb.first_air_date || '',
+            genre_ids: tmdb.genre_ids || [],
+            name: tmdb.name || tmdb.title || '',
+            original_name: tmdb.original_name || tmdb.original_title || '',
+            media_type: isTV ? 'tv' : 'movie'
+        };
     }
 
     function makeRow(sort) {
         return function (callback) {
-            var url = buildApiUrl(sort);
+            var url = buildKpUrl(sort);
 
             kpRequest(url, function (data) {
-                var items = data.items || data.films || [];
-                if (!items.length) return callback({ results: [] });
+                var kpItems = data.items || data.films || [];
+                if (!kpItems.length) return callback({ results: [] });
 
-                var results = items.map(kpToLampaCard);
-                var t = Lampa.Lang.translate(sort.title) + ' — ' + NETWORK_NAME;
-                registerTitle(t);
+                var results = [];
+                var pending = kpItems.length;
 
-                callback({
-                    results: results,
-                    title: t,
-                    nomore: true
+                kpItems.forEach(function (kpItem) {
+                    var title = kpItem.nameRu || kpItem.nameOriginal || kpItem.nameEn || '';
+                    var orig = kpItem.nameOriginal || kpItem.nameEn || '';
+                    var year = kpItem.year || '';
+                    var isSeries = (kpItem.type === 'TV_SERIES' || kpItem.type === 'MINI_SERIES' || kpItem.type === 'TV_SHOW');
+                    var kpRating = kpItem.ratingKinopoisk || 0;
+
+                    searchTmdb(title, orig, year, isSeries, function (tmdbItem) {
+                        if (tmdbItem) {
+                            results.push(tmdbToLampaCard(tmdbItem, kpRating));
+                        }
+                        pending--;
+                        if (pending <= 0) {
+                            var t = Lampa.Lang.translate(sort.title) + ' — ' + NETWORK_NAME;
+                            registerTitle(t);
+
+                            callback({
+                                results: results,
+                                title: t,
+                                nomore: true
+                            });
+                        }
+                    });
                 });
             }, function () { callback({ results: [] }); });
         };
@@ -228,54 +243,6 @@
                 });
             })(i);
         }
-    }
-
-    // Перехватываем клик по карточке — ищем в TMDB и открываем правильно
-    function interceptCardClick() {
-        Lampa.Listener.follow('full', function (e) {
-            if (e.type === 'start') {
-                var card = e.data && e.data.movie;
-                if (!card || !card.dm_source) return;
-
-                // Останавливаем загрузку — будем искать в TMDB
-                e.preventDefault && e.preventDefault();
-            }
-        });
-
-        // Перехватываем открытие карточки
-        var originalActivity = Lampa.Activity.push;
-        Lampa.Activity.push = function (obj) {
-            var card = obj && obj.movie;
-            if (card && card.dm_source && card.source === 'kp') {
-                // Ищем в TMDB по названию
-                Lampa.Noty.show('Ищем в TMDB: ' + card.title);
-
-                findTmdbId(card.title, card.year, card.media_type, function (tmdbItem) {
-                    if (tmdbItem) {
-                        // Подменяем данные на TMDB
-                        var newCard = Object.assign({}, tmdbItem);
-                        newCard.source = 'tmdb';
-                        newCard.media_type = tmdbItem.media_type || card.media_type;
-                        if (!newCard.title) newCard.title = tmdbItem.name || card.title;
-                        if (!newCard.original_title) newCard.original_title = tmdbItem.original_name || card.original_title;
-                        delete newCard.dm_source;
-
-                        obj.movie = newCard;
-                        obj.id = newCard.id;
-                        originalActivity.call(Lampa.Activity, obj);
-                    } else {
-                        Lampa.Noty.show('Не найдено в TMDB');
-                        // Открываем как есть — пусть Lampa попробует
-                        delete card.dm_source;
-                        originalActivity.call(Lampa.Activity, obj);
-                    }
-                });
-
-                return;
-            }
-
-            originalActivity.call(Lampa.Activity, obj);
-        };
     }
 
     function addLang() {
@@ -317,7 +284,6 @@
         startObserver();
         registerContentRows();
         addSettings();
-        interceptCardClick();
     }
 
     if (window.appready) start();
