@@ -1,4 +1,4 @@
-
+    
 
 (function () {
     'use strict';
@@ -305,14 +305,49 @@
 
     var MAX_ROWS = 16;
 
-    // Штатные ряды ядра Lampa (timetable_lately, timetable_recently,
-    // continue_watch, recomend_watch) зарегистрированы с index:1 и попадают
-    // в parts_data раньше нас — ядро грузится до customPlugins.
-    // Плюс наш собственный ряд "Вы смотрели" (continue_movies).
-    // Берём заведомо больший базис, чтобы splice клал подборки строго правее.
-    var ROW_BASE = 12;
+    // Штатные ряды ядра (все с index:1) попадают в parts_data раньше нас —
+    // ядро грузится до customPlugins. Arrays.insert это splice, вставка идёт
+    // ПЕРЕД тем, что уже на позиции, поэтому continue_watch ("Продолжить
+    // просмотр") оказывается последним в блоке штатных.
+    //
+    // Плюс наш ряд "Вы смотрели" из continue_movies.js — он встаёт сразу
+    // за continue_watch. Значит базис подборок = штатные + 1 (Вы смотрели) + 1.
+    //
+    // Дальше подборки идут подряд, а всё остальное (тренды, топы, жанры TMDB)
+    // остаётся ниже — как и было.
+    var NATIVE_ROWS = [
+        'continue_watch',
+        'recomend_watch',
+        'timetable_lately',
+        'timetable_recently'
+    ];
+
+    function rowBase() {
+        var enabled = 0;
+
+        NATIVE_ROWS.forEach(function (n) {
+            try {
+                if (Lampa.Storage.get('content_rows_' + n, 'true')) enabled++;
+            } catch (e) {
+                enabled++;
+            }
+        });
+
+        // +1 на сам блок штатных, +1 на ряд "Вы смотрели"
+        var base = enabled + 2;
+
+        // Если continue_movies.js отключён в Настройки -> Каналы,
+        // место освобождается — не оставляем дырку.
+        try {
+            if (!Lampa.Storage.get('content_rows_continue_watch_movies', 'true')) base--;
+        } catch (e) {}
+
+        return base;
+    }
 
     function registerContentRows() {
+        var ROW_BASE = rowBase();
+
         for (var i = 0; i < MAX_ROWS; i++) {
             (function (idx) {
                 Lampa.ContentRows.add({
@@ -409,22 +444,4 @@
 
         Lampa.SettingsApi.addParam({
             component: 'streaming_collections', param: { name: 'sc_rs', type: 'button' },
-            field: { name: Lampa.Lang.translate('sc_russian'), description: Lampa.Lang.translate('sc_russian_description') },
-            onChange: function () {
-                var p = Lampa.Controller.enabled().name;
-                Lampa.Select.show({
-                    title: Lampa.Lang.translate('sc_russian'),
-                    items: russianStreaming.map(function (s) { return { title: s.title, id: s.id, checkbox: true, checked: getSetting('rs_' + s.id, true) }; }),
-                    onBack: function () { Lampa.Controller.toggle(p); },
-                    onCheck: function (i) { setSetting('rs_' + i.id, !getSetting('rs_' + i.id, true)); i.checked = getSetting('rs_' + i.id, true); }
-                });
-            }
-        });
-    }
-
-    function start() { addLang(); preloadLogos(); startObserver(); registerContentRows(); addSettings(); }
-
-    if (window.appready) start();
-    else Lampa.Listener.follow('app', function (e) { if (e.type === 'ready') start(); });
-})();
-        
+            field: { name: Lampa.Lang.translate('sc_russian'), description: Lampa.La        
