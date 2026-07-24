@@ -1,4 +1,5 @@
 
+
 (function () {
     'use strict';
 
@@ -40,23 +41,70 @@
     var LOGO_STORAGE_KEY = 'sc_logo_cache';
     var logoCache = Lampa.Storage.get(LOGO_STORAGE_KEY) || {};
 
+    // Одноразовая чистка кэша логотипов после смены логики URL.
+    // Раньше сюда могли попасть переписанные вручную ссылки — удаляем их,
+    // чтобы плагин запросил логотипы заново уже через Lampa.TMDB.image.
+    (function resetLogoCacheOnce() {
+        var VER_KEY = 'sc_logo_cache_ver';
+        var VER = '2';
+        try {
+            if (Lampa.Storage.get(VER_KEY, '') !== VER) {
+                logoCache = {};
+                Lampa.Storage.set(LOGO_STORAGE_KEY, logoCache);
+                Lampa.Storage.set(VER_KEY, VER);
+            }
+        } catch (e) {}
+    })();
+
+    // Подписчики: networkId -> [callback, ...]
+    // Когда лого придёт — вызываем всех подписчиков (в т.ч. уже отрисованные иконки)
+    var logoSubscribers = {};
+
     function saveLogoCache() {
         Lampa.Storage.set(LOGO_STORAGE_KEY, logoCache);
     }
 
+    function onLogoReady(networkId, callback) {
+        if (logoCache[networkId]) { callback(logoCache[networkId]); return; }
+        if (!logoSubscribers[networkId]) logoSubscribers[networkId] = [];
+        logoSubscribers[networkId].push(callback);
+    }
+
     function getLogoUrl(networkId, callback) {
-        if (logoCache.hasOwnProperty(networkId) && logoCache[networkId]) return callback(logoCache[networkId]);
-        if (logoPending[networkId]) { logoPending[networkId].push(callback); return; }
-        logoPending[networkId] = [callback];
+        // Есть в кэше и не пустой — сразу отдаём
+        if (logoCache.hasOwnProperty(networkId) && logoCache[networkId]) {
+            if (callback) callback(logoCache[networkId]);
+            return;
+        }
+        // Уже грузится — просто подписываемся
+        if (logoPending[networkId]) {
+            if (callback) logoPending[networkId].push(callback);
+            return;
+        }
+        logoPending[networkId] = callback ? [callback] : [];
 
         var apiUrl = Lampa.TMDB.api('network/' + networkId + '?api_key=' + Lampa.TMDB.key());
         Lampa.Network.silent(apiUrl, function (data) {
+            // Lampa.TMDB.image сама подставит прокси, если в настройках
+            // включено «Проксировать TMDB». Ничего не переписываем.
             var url = data && data.logo_path ? Lampa.TMDB.image('t/p/w154' + data.logo_path) : '';
-            logoCache[networkId] = url;
-            saveLogoCache();
+
+            // Не пишем пустой URL в кэш — иначе следующий заход возьмёт '' из кэша
+            // и не запустит повторный запрос. Логотип не появится никогда.
+            if (url) {
+                logoCache[networkId] = url;
+                saveLogoCache();
+            }
+
             var cbs = logoPending[networkId] || [];
             delete logoPending[networkId];
             cbs.forEach(function (cb) { cb(url); });
+
+            // Уведомляем подписчиков (уже отрисованные иконки-плейсхолдеры)
+            if (url && logoSubscribers[networkId]) {
+                logoSubscribers[networkId].forEach(function (cb) { cb(url); });
+                delete logoSubscribers[networkId];
+            }
         }, function () {
             var cbs = logoPending[networkId] || [];
             delete logoPending[networkId];
@@ -65,7 +113,9 @@
     }
 
     function preloadLogos() {
-        globalStreaming.concat(russianStreaming).forEach(function (s) { getLogoUrl(s.id, function () {}); });
+        globalStreaming.concat(russianStreaming).forEach(function (s) {
+            getLogoUrl(s.id, null);
+        });
     }
 
     function getAll() { return Lampa.Storage.get('streaming_collections_settings') || {}; }
@@ -144,31 +194,62 @@
         titleRegistry[titleText] = { networkId: networkId, serviceName: serviceName };
     }
 
-    function createIconWrap(networkId, serviceName) {
-        var url = logoCache[networkId];
+    function createIconImg(url) {
+        return $('<img>').attr('src', url).css({
+            width: '1.45em', height: '1.45em', 'object-fit': 'contain', display: 'block'
+        });
+    }
 
+    function createIconWrap(networkId, serviceName) {
         var wrap = $('<span>').css({
             display: 'inline-flex', 'align-items': 'center', 'justify-content': 'center',
             width: '1.9em', height: '1.9em',
-            'background-color': 'rgba(255,255,255,0.60)',
+            'background-color': 'rgba(255,255,255,1)',
             'border-radius': '0.35em', 'margin-right': '0.45em', 'flex-shrink': '0'
         });
 
+        var url = logoCache[networkId];
+
         if (url) {
-            wrap.append($('<img>').attr('src', url).css({
-                width: '1.45em', height: '1.45em', 'object-fit': 'contain', display: 'block'
-            }));
+            // Лого уже в кэше — сразу ставим картинку
+            wrap.append(createIconImg(url));
         } else {
-            wrap.append($('<span>').text(serviceName.substring(0, 2).toUpperCase()).css({
-                color: '#fff', 'font-size': '0.5em', 'font-weight': '700'
-            }));
+            // Кэша нет — ставим невидимый плейсхолдер (белый квадрат без текста)
+            // и подписываемся: как только лого придёт — заменяем
+            onLogoReady(networkId, function (logoUrl) {
+                if (!logoUrl) return;
+                wrap.empty().append(createIconImg(logoUrl));
+            });
         }
 
         return wrap;
     }
 
+    // Возвращает jQuery-элементы заголовков строк — совместимо со старой Lampa и CUB/LampacNG
+    function findTitleElements() {
+        var selectors = [
+            '.items-line__title',
+            '.items-line--title',
+            '.items-line__header',
+            '.content-row__title',
+            '.row__title'
+        ];
+        var $found = $();
+        for (var i = 0; i < selectors.length; i++) {
+            var $els = $(selectors[i]);
+            if ($els.length) $found = $found.add($els);
+        }
+        if (!$found.length) {
+            $('[class]').each(function () {
+                var cls = $(this).attr('class') || '';
+                if (/items.line/i.test(cls) && /title/i.test(cls)) $found = $found.add(this);
+            });
+        }
+        return $found;
+    }
+
     function processAllTitles() {
-        $('.items-line__title').each(function () {
+        findTitleElements().each(function () {
             var el = $(this);
             if (el.data('sc-icon')) return;
 
@@ -187,7 +268,6 @@
     function startObserver() {
         if (observerStarted) return;
         observerStarted = true;
-
         setInterval(processAllTitles, 500);
     }
 
@@ -225,11 +305,18 @@
 
     var MAX_ROWS = 16;
 
+    // Штатные ряды ядра Lampa (timetable_lately, timetable_recently,
+    // continue_watch, recomend_watch) зарегистрированы с index:1 и попадают
+    // в parts_data раньше нас — ядро грузится до customPlugins.
+    // Плюс наш собственный ряд "Вы смотрели" (continue_movies).
+    // Берём заведомо больший базис, чтобы splice клал подборки строго правее.
+    var ROW_BASE = 12;
+
     function registerContentRows() {
         for (var i = 0; i < MAX_ROWS; i++) {
             (function (idx) {
                 Lampa.ContentRows.add({
-                    index: 3 + idx * 2,
+                    index: ROW_BASE + idx,
                     name: 'sc_row_' + idx,
                     title: '',
                     screen: ['main'],
@@ -340,3 +427,4 @@
     if (window.appready) start();
     else Lampa.Listener.follow('app', function (e) { if (e.type === 'ready') start(); });
 })();
+        
