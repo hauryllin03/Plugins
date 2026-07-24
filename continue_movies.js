@@ -1,3 +1,4 @@
+
 (function () {
     'use strict';
 
@@ -26,6 +27,38 @@
             c.broad = false;
             return c;
         });
+    }
+
+    /**
+     * Позиция ряда в parts_data.
+     *
+     * Штатные ряды ядра (timetable_lately, timetable_recently,
+     * continue_watch, recomend_watch) зарегистрированы с index:1 и
+     * вставляются в parts_data ДО нашего плагина — ядро грузится раньше
+     * customPlugins. Каждая вставка это Arrays.insert = splice, то есть
+     * предыдущие сдвигаются вправо.
+     *
+     * Считаем, сколько штатных рядов реально включено пользователем
+     * в Настройки -> Каналы, и встаём сразу за ними.
+     */
+    function rowIndex() {
+        var native_rows = [
+            'timetable_lately',
+            'timetable_recently',
+            'continue_watch',
+            'recomend_watch'
+        ];
+        var enabled = 0;
+
+        native_rows.forEach(function (n) {
+            try {
+                if (Lampa.Storage.get('content_rows_' + n, 'true')) enabled++;
+            } catch (e) {
+                enabled++;
+            }
+        });
+
+        return enabled + 1;
     }
 
     function ContinueMoviesComponent(object) {
@@ -120,7 +153,7 @@
         Lampa.ContentRows.add({
             name:   'continue_watch_movies',
             title:  Lampa.Lang.translate('title_watched') || 'Вы смотрели',
-            index:  2,
+            index:  rowIndex(),
             screen: ['main'],
             call: function (params, screen) {
                 var all = getContinueMovies();
@@ -147,3 +180,4 @@
     }
 
 })();
+                    
