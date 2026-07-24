@@ -32,25 +32,35 @@
     /**
      * Позиция ряда в parts_data.
      *
-     * Штатные ряды ядра (timetable_lately, timetable_recently,
-     * continue_watch, recomend_watch) зарегистрированы с index:1 и
-     * вставляются в parts_data ДО нашего плагина — ядро грузится раньше
-     * customPlugins. Каждая вставка это Arrays.insert = splice, то есть
-     * предыдущие сдвигаются вправо.
+     * Все четыре штатных ряда ядра зарегистрированы с index:1 и попадают
+     * в parts_data раньше нас (ядро грузится до customPlugins).
+     * Arrays.insert это splice(index, 0, item) — вставка ПЕРЕД тем, что уже
+     * лежит на этой позиции, поэтому порядок на экране обратен порядку
+     * регистрации:
      *
-     * Считаем, сколько штатных рядов реально включено пользователем
-     * в Настройки -> Каналы, и встаём сразу за ними.
+     *   регистрация: continue_watch -> recomend_watch -> timetable_lately
+     *                -> timetable_recently
+     *   на экране:   timetable_recently, timetable_lately, recomend_watch,
+     *                continue_watch
+     *
+     * То есть continue_watch ("Продолжить просмотр") оказывается ПОСЛЕДНИМ
+     * из штатных. Чтобы встать сразу за ним, берём позицию = число
+     * включённых штатных рядов + 1.
+     *
+     * Если пользователь выключил часть рядов в Настройки -> Каналы,
+     * блок короче — индекс пересчитывается сам.
      */
-    function rowIndex() {
-        var native_rows = [
-            'timetable_lately',
-            'timetable_recently',
-            'continue_watch',
-            'recomend_watch'
-        ];
+    var NATIVE_ROWS = [
+        'continue_watch',
+        'recomend_watch',
+        'timetable_lately',
+        'timetable_recently'
+    ];
+
+    function nativeRowsCount() {
         var enabled = 0;
 
-        native_rows.forEach(function (n) {
+        NATIVE_ROWS.forEach(function (n) {
             try {
                 if (Lampa.Storage.get('content_rows_' + n, 'true')) enabled++;
             } catch (e) {
@@ -58,7 +68,11 @@
             }
         });
 
-        return enabled + 1;
+        return enabled;
+    }
+
+    function rowIndex() {
+        return nativeRowsCount() + 1;
     }
 
     function ContinueMoviesComponent(object) {
@@ -180,4 +194,4 @@
     }
 
 })();
-                    
+                
