@@ -356,17 +356,16 @@
     //  TMDB main$2). Ядро домешивает в этот массив зарегистрированные ряды:
     //  канальные (continue_watch/recomend/timetable, все index:1) и наши.
     //
-    //  Нам нужно, чтобы наши ряды ("Вы смотрели" + подборки) шли СРАЗУ за
-    //  блоком канальных рядов Lampa, но выше остальных загрузчиков.
+    //  Задача:
+    //   - "Вы смотрели" (__sc_priority 0) — сразу за блоком канальных рядов;
+    //   - подборки стримингов (priority 100+) — ВРАЗБРОС среди рядов
+    //     КУБ/TMDB ниже границы (Последнее добавление, Огонь, Популярное...),
+    //     а не отдельным блоком.
     //
-    //  Как ловим границу: снимаем Set(calls) ДО origCall — это исходные
-    //  загрузчики (ссылки на функции стабильны, splice их не пересоздаёт).
-    //  После origCall идём с позиции 1, пропуская всё, чего НЕ было в Set
-    //  (это вставленные ядром канальные ряды). Первый исходный загрузчик =
-    //  конец канального блока, туда и вставляем наши.
-    //
-    //  Порядок наших: "Вы смотрели" (__sc_priority 0) первым, подборки —
-    //  в естественном порядке, как легли (без пересортировки по номеру).
+    //  Граница = конец канального блока Lampa. Ловим её так: снимаем
+    //  Set(calls) ДО origCall (исходные загрузчики, ссылки стабильны), после
+    //  origCall идём с позиции 1, пропуская всё, чего НЕ было в Set (это
+    //  вставленные ядром канальные ряды). Первый исходный загрузчик = граница.
     // ------------------------------------------------------------------
     function installRowsReorder() {
         if (window.__sc_rows_reorder_installed) return;
@@ -385,37 +384,44 @@
 
             origCall(screen, params, calls);
 
-            // 1) Вынимаем наши помеченные ряды, сохраняя их порядок в массиве.
-            var ours = [];
+            // 1) Вынимаем наши помеченные ряды из массива.
+            var watched = null;   // "Вы смотрели" (priority 0)
+            var collections = []; // подборки стримингов (priority 100+)
+
             for (var i = calls.length - 1; i >= 0; i--) {
                 var cb = calls[i];
                 if (cb && typeof cb.__sc_priority === 'number') {
-                    ours.unshift(cb);
+                    if (cb.__sc_priority === 0) watched = cb;
+                    else collections.unshift(cb);
                     calls.splice(i, 1);
                 }
             }
-            if (!ours.length) return;
+            if (!watched && !collections.length) return;
 
-            // 2) Только "Вы смотрели" (priority 0) держим первым. Подборки
-            //    (priority 100+) — как легли, вразнобой. Стабильная сортировка:
-            //    priority 0 -> в начало, всё остальное -> сохраняет порядок.
-            ours.sort(function (a, b) {
-                var pa = a.__sc_priority === 0 ? 0 : 1;
-                var pb = b.__sc_priority === 0 ? 0 : 1;
-                return pa - pb;
-            });
-
-            // 3) Граница канального блока Lampa: с позиции 1 пропускаем всё,
-            //    чего не было в исходном массиве. Первый исходный = граница.
-            var insertAt = 1; // после now_playing по умолчанию
+            // 2) Граница канального блока Lampa: с позиции 1 пропускаем всё,
+            //    чего не было в исходном массиве (вставленные ядром каналы).
+            //    Первый исходный загрузчик = конец блока.
+            var boundary = 1; // после now_playing по умолчанию
             for (var j = 1; j < calls.length; j++) {
-                if (originalSet.has(calls[j])) { insertAt = j; break; }
-                insertAt = j + 1;
+                if (originalSet.has(calls[j])) { boundary = j; break; }
+                boundary = j + 1;
             }
 
-            // 4) Вставляем наши ряды одним блоком.
-            for (var k = 0; k < ours.length; k++) {
-                calls.splice(insertAt + k, 0, ours[k]);
+            // 3) "Вы смотрели" — вплотную за границей.
+            if (watched) {
+                calls.splice(boundary, 0, watched);
+                boundary++; // подборки раскидываем уже НИЖЕ "Вы смотрели"
+            }
+
+            // 4) Подборки — вразброс среди рядов КУБ/TMDB (всё, что ниже
+            //    boundary). Идём по подборкам и каждую вставляем в случайную
+            //    позицию в диапазоне [boundary .. конец]. После каждой вставки
+            //    длина растёт, поэтому пересчитываем верхнюю границу на месте.
+            for (var k = 0; k < collections.length; k++) {
+                var lo = boundary;
+                var hi = calls.length; // splice(hi,...) допустим — вставит в конец
+                var pos = lo + Math.floor(Math.random() * (hi - lo + 1));
+                calls.splice(pos, 0, collections[k]);
             }
         };
     }
@@ -516,4 +522,3 @@
     if (window.appready) start();
     else Lampa.Listener.follow('app', function (e) { if (e.type === 'ready') start(); });
 })();
- 
