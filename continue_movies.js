@@ -28,51 +28,14 @@
         });
     }
 
-    /**
-     * Позиция ряда в parts_data.
-     *
-     * Все четыре штатных ряда ядра зарегистрированы с index:1 и попадают
-     * в parts_data раньше нас (ядро грузится до customPlugins).
-     * Arrays.insert это splice(index, 0, item) — вставка ПЕРЕД тем, что уже
-     * лежит на этой позиции, поэтому порядок на экране обратен порядку
-     * регистрации:
-     *
-     *   регистрация: continue_watch -> recomend_watch -> timetable_lately
-     *                -> timetable_recently
-     *   на экране:   timetable_recently, timetable_lately, recomend_watch,
-     *                continue_watch
-     *
-     * То есть continue_watch ("Продолжить просмотр") оказывается ПОСЛЕДНИМ
-     * из штатных. Чтобы встать сразу за ним, берём позицию = число
-     * включённых штатных рядов + 1.
-     *
-     * Если пользователь выключил часть рядов в Настройки -> Каналы,
-     * блок короче — индекс пересчитывается сам.
-     */
-    var NATIVE_ROWS = [
-        'continue_watch',
-        'recomend_watch',
-        'timetable_lately',
-        'timetable_recently'
-    ];
-
-    function nativeRowsCount() {
-        var enabled = 0;
-
-        NATIVE_ROWS.forEach(function (n) {
-            try {
-                if (Lampa.Storage.get('content_rows_' + n, 'true')) enabled++;
-            } catch (e) {
-                enabled++;
-            }
-        });
-
-        return enabled;
-    }
-
-    function rowIndex() {
-        return nativeRowsCount() + 1;
-    }
+    // Порядок ряда на главной задаёт перехватчик ContentRows.call из
+    // podborki.js: он ставит все помеченные __sc_priority ряды сразу за
+    // блоком "канальных" рядов Lampa. "Вы смотрели" помечаем приоритетом 0,
+    // чтобы шёл ПЕРВЫМ среди наших — сразу после "Продолжить просмотр",
+    // перед подборками стримингов (у тех приоритет 100+).
+    //
+    // Если podborki.js по какой-то причине не загружен, перехвата нет —
+    // ряд просто встанет по своему index:1, как обычный плагинный ряд.
 
     function ContinueMoviesComponent(object) {
         var CategoryFull = Lampa.Component.get('category_full');
@@ -166,13 +129,13 @@
         Lampa.ContentRows.add({
             name:   'continue_watch_movies',
             title:  Lampa.Lang.translate('title_watched') || 'Вы смотрели',
-            index:  rowIndex(),
+            index:  1,
             screen: ['main'],
             call: function (params, screen) {
                 var all = getContinueMovies();
                 if (!all.length) return;
 
-                return function (call) {
+                var producer = function (call) {
                     call({
                         results:          all.slice(0, 19),
                         title:            Lampa.Lang.translate('title_watched') || 'Вы смотрели',
@@ -180,6 +143,11 @@
                         _continue_movies: true
                     });
                 };
+
+                // Приоритет 0 — перехватчик из podborki.js поставит этот ряд
+                // первым среди наших, сразу за "Продолжить просмотр".
+                producer.__sc_priority = 0;
+                return producer;
             }
         });
     }
@@ -190,6 +158,9 @@
         Lampa.Listener.follow('app', function (e) {
             if (e.type === 'ready') init();
         });
+    }
+
+})();
     }
 
 })();
