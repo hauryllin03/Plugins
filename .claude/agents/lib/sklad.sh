@@ -1,20 +1,28 @@
 #!/usr/bin/env bash
 # Единая точка входа для сбора баз клиентов ООО «СКЛАД».
 #
-# Запускать НА СВОЕЙ МАШИНЕ: облачные сессии Claude Code режут доступ
-# к 2GIS и zakupki.gov.ru политикой egress-прокси.
+# Всё ставится в изолированное venv-окружение — пакеты в систему не попадают.
+# Скрипт только читает свой каталог и пишет выгрузки в SKLAD_OUT.
+# Ничего не удаляет и не требует root.
 #
-#   ./sklad.sh setup              — поставить зависимости, проверить готовность
+#   ./sklad.sh setup              — создать окружение, проверить готовность
 #   ./sklad.sh check              — проверить доступ к источникам
 #   ./sklad.sh base Казань        — собрать базу по городу (2GIS)
 #   ./sklad.sh tenders Татарстан  — собрать тендеры (ЕИС)
 #   ./sklad.sh all Казань Татарстан — и то, и другое
+#
+# Переменные:
+#   DGIS_API_KEY  ключ 2GIS
+#   SKLAD_OUT     куда складывать выгрузки (по умолчанию ~/sklad-leads)
+#   SKLAD_VENV    где держать окружение   (по умолчанию ~/.sklad-venv)
 
 set -uo pipefail
 cd "$(dirname "$0")"
 
 BOLD=$'\033[1m'; GREEN=$'\033[32m'; RED=$'\033[31m'; YELLOW=$'\033[33m'; OFF=$'\033[0m'
 OUTDIR="${SKLAD_OUT:-$HOME/sklad-leads}"
+VENV="${SKLAD_VENV:-$HOME/.sklad-venv}"
+PY="$VENV/bin/python"
 STAMP=$(date +%Y-%m-%d)
 
 say()  { printf '%s\n' "$*"; }
@@ -22,24 +30,51 @@ ok()   { printf '%s✓%s %s\n' "$GREEN" "$OFF" "$*"; }
 warn() { printf '%s!%s %s\n' "$YELLOW" "$OFF" "$*"; }
 err()  { printf '%s✗%s %s\n' "$RED" "$OFF" "$*"; }
 
-need_python() {
-  if ! command -v python3 >/dev/null 2>&1; then
-    err "Python 3 не найден. Поставь его: https://www.python.org/downloads/"
+root_warning() {
+  if [ "$(id -u)" -eq 0 ]; then
+    warn "Запущено от root. Для регулярной работы заведи отдельного пользователя:"
+    say  "    sudo ./install-hardened.sh"
+    say  ""
+  fi
+}
+
+need_venv() {
+  if [ ! -x "$PY" ]; then
+    err "окружение не создано. Запусти сначала: ./sklad.sh setup"
     exit 1
   fi
 }
 
 cmd_setup() {
   say "${BOLD}Установка${OFF}"
-  need_python
+  root_warning
+
+  if ! command -v python3 >/dev/null 2>&1; then
+    err "Python 3 не найден: sudo apt install python3 python3-venv"
+    exit 1
+  fi
   ok "Python $(python3 -V 2>&1 | cut -d' ' -f2)"
 
+  if [ ! -x "$PY" ]; then
+    say "  создаю окружение в $VENV ..."
+    if ! python3 -m venv "$VENV" 2>&1 | sed 's/^/    /'; then
+      err "не удалось создать venv. Скорее всего не хватает пакета:"
+      say "    sudo apt install python3-venv"
+      exit 1
+    fi
+  fi
+  ok "окружение: $VENV"
+
   say "  ставлю зависимости..."
-  if python3 -m pip install --quiet --upgrade requests openpyxl 2>/dev/null; then
+  # Ошибки pip показываем целиком: молчаливый провал здесь уже стоил времени.
+  if ! "$PY" -m pip install --quiet --upgrade pip 2>&1 | sed 's/^/    /'; then
+    warn "pip не обновился, продолжаю"
+  fi
+  if "$PY" -m pip install --quiet requests openpyxl 2>&1 | sed 's/^/    /'; then
     ok "requests, openpyxl"
   else
-    err "не удалось поставить зависимости. Попробуй вручную:"
-    say "    python3 -m pip install requests openpyxl"
+    err "зависимости не поставились. Полный вывод:"
+    "$PY" -m pip install requests openpyxl 2>&1 | tail -20 | sed 's/^/    /'
     exit 1
   fi
 
@@ -47,16 +82,15 @@ cmd_setup() {
 
   say ""
   if [ -n "${DGIS_API_KEY:-}" ]; then
-    ok "ключ 2GIS найден в DGIS_API_KEY"
+    ok "ключ 2GIS найден"
   else
     warn "ключ 2GIS не задан — сбор по справочнику работать не будет"
     say "    1. Зарегистрируйся: https://platform.2gis.ru/"
     say "    2. Создай демо-ключ (бесплатно, 1000 запросов, месяц)"
-    say "    3. Добавь в ~/.zshrc или ~/.bashrc:"
-    say "         export DGIS_API_KEY=\"твой-ключ\""
+    say "    3. Добавь в ~/.bashrc:  export DGIS_API_KEY=\"твой-ключ\""
     say "    4. Перезапусти терминал"
     say ""
-    say "    Тендеры (./sklad.sh tenders) ключа не требуют — их можно собирать уже сейчас."
+    say "    Тендеры (./sklad.sh tenders) ключа не требуют."
   fi
   say ""
   say "Готово. Дальше: ${BOLD}./sklad.sh check${OFF}"
@@ -64,7 +98,7 @@ cmd_setup() {
 
 cmd_check() {
   say "${BOLD}Проверка доступа к источникам${OFF}"
-  need_python
+  need_venv
   local fails=0
 
   say ""
@@ -72,7 +106,7 @@ cmd_check() {
   if [ -z "${DGIS_API_KEY:-}" ]; then
     warn "   ключ не задан (DGIS_API_KEY) — пропускаю"
     fails=$((fails + 1))
-  elif python3 - <<'PY'
+  elif "$PY" - <<'PY'
 import os, sys, requests
 try:
     r = requests.get("https://catalog.api.2gis.com/3.0/items",
@@ -95,11 +129,11 @@ PY
 
   say ""
   say "2. Тендеры ЕИС"
-  if python3 leadgen_zakupki.py --self-check >/dev/null 2>&1; then
+  if "$PY" leadgen_zakupki.py --self-check >/dev/null 2>&1; then
     ok "   доступен"
   else
     err "   недоступен — подробности:"
-    python3 leadgen_zakupki.py --self-check 2>&1 | sed 's/^/     /' | tail -6
+    "$PY" leadgen_zakupki.py --self-check 2>&1 | sed 's/^/     /' | tail -6
     fails=$((fails + 1))
   fi
 
@@ -110,7 +144,7 @@ PY
 cmd_base() {
   local city="${1:-}"
   [ -z "$city" ] && { err "укажи город: ./sklad.sh base Казань"; exit 1; }
-  need_python
+  need_venv
   if [ -z "${DGIS_API_KEY:-}" ]; then
     err "нет ключа 2GIS. Запусти ./sklad.sh setup — там инструкция."
     exit 1
@@ -119,19 +153,19 @@ cmd_base() {
   local out="$OUTDIR/база_${city}_${STAMP}.xlsx"
 
   say "${BOLD}Сбор базы по городу: $city${OFF}"
-  python3 leadgen_2gis.py --city "$city" --out "$out" --with-phone-only -v || exit 1
+  "$PY" leadgen_2gis.py --city "$city" --out "$out" --with-phone-only -v || exit 1
   say ""
   ok "файл: $out"
 }
 
 cmd_tenders() {
   local region="${1:-}"
-  need_python
+  need_venv
   mkdir -p "$OUTDIR"
   local out="$OUTDIR/тендеры_${region:-РФ}_${STAMP}.xlsx"
 
   say "${BOLD}Сбор тендеров: ${region:-вся Россия}${OFF}"
-  python3 leadgen_zakupki.py --region "$region" --days 365 --indirect --out "$out" -v || exit 1
+  "$PY" leadgen_zakupki.py --region "$region" --days 365 --indirect --out "$out" -v || exit 1
   say ""
   ok "файл: $out"
 }
@@ -151,19 +185,19 @@ usage() {
   cat <<EOF
 ${BOLD}Сбор баз клиентов ООО «СКЛАД»${OFF}
 
-  ./sklad.sh setup                  поставить зависимости и проверить готовность
+  ./sklad.sh setup                  создать окружение и проверить готовность
   ./sklad.sh check                  проверить доступ к источникам
   ./sklad.sh base <город>           база по справочнику 2GIS (нужен ключ)
   ./sklad.sh tenders [регион]       тендеры ЕИС (ключ не нужен)
   ./sklad.sh all <город> [регион]   и то, и другое
 
-Выгрузки складываются в $OUTDIR (меняется через SKLAD_OUT).
+  окружение: $VENV
+  выгрузки:  $OUTDIR
 
 Примеры:
   ./sklad.sh setup
   ./sklad.sh base Казань
   ./sklad.sh tenders Татарстан
-  ./sklad.sh all Казань Татарстан
 EOF
 }
 
