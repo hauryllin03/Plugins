@@ -20,6 +20,12 @@ set -uo pipefail
 cd "$(dirname "$0")"
 
 BOLD=$'\033[1m'; GREEN=$'\033[32m'; RED=$'\033[31m'; YELLOW=$'\033[33m'; OFF=$'\033[0m'
+# /etc/sklad.env читает systemd, но при ручном запуске его никто не загружает —
+# без этого ключ «не виден», хотя он там прописан.
+if [ -z "${DGIS_API_KEY:-}" ] && [ -r /etc/sklad.env ]; then
+  set -a; . /etc/sklad.env; set +a
+fi
+
 OUTDIR="${SKLAD_OUT:-$HOME/sklad-leads}"
 VENV="${SKLAD_VENV:-$HOME/.sklad-venv}"
 PY="$VENV/bin/python"
@@ -129,11 +135,13 @@ PY
 
   say ""
   say "2. Тендеры ЕИС"
-  if "$PY" leadgen_zakupki.py --self-check >/dev/null 2>&1; then
+  # -u обязателен: без него stdout буферизуется в конвейере, строки
+  # перемешиваются со stderr и причина сбоя теряется.
+  if "$PY" -u leadgen_zakupki.py --self-check >/dev/null 2>&1; then
     ok "   доступен"
   else
     err "   недоступен — подробности:"
-    "$PY" leadgen_zakupki.py --self-check 2>&1 | sed 's/^/     /' | tail -6
+    "$PY" -u leadgen_zakupki.py --self-check 2>&1 | sed 's/^/     /'
     fails=$((fails + 1))
   fi
 
