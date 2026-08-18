@@ -1,0 +1,8 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Выгрузки лидов: содержат контакты клиентов, в репозиторий не попадают
+*.xlsx
+*.csv
+!.claude/agents/lib/**/template*.xlsx
