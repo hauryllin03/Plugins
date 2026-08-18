@@ -23,6 +23,13 @@ VENV_DIR="$DATA_DIR/venv"
 OUT_DIR="$DATA_DIR/leads"
 SRC_DIR="$(cd "$(dirname "$0")" && pwd)"
 
+# Файлы, из которых состоит сборщик.
+PARTS="leadgen_2gis.py leadgen_zakupki.py segments.py sklad.sh"
+
+# Если скрипт скачали отдельно, без репозитория, он дотянет остальное сам.
+REPO_BRANCH="${SKLAD_BRANCH:-claude/agents-specialty-equipment-sales-lt4pw3}"
+RAW_BASE="https://raw.githubusercontent.com/hauryllin03/Plugins/${REPO_BRANCH}/.claude/agents/lib"
+
 BOLD=$'\033[1m'; GREEN=$'\033[32m'; YELLOW=$'\033[33m'; RED=$'\033[31m'; OFF=$'\033[0m'
 ok()   { printf '%s✓%s %s\n' "$GREEN" "$OFF" "$*"; }
 warn() { printf '%s!%s %s\n' "$YELLOW" "$OFF" "$*"; }
@@ -34,6 +41,41 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 printf '%s\n\n' "${BOLD}Установка сборщиков СКЛАД с ограничением прав${OFF}"
+
+# ---------- 0. Исходники ----------
+# Обычный случай: скрипт лежит в репозитории рядом с остальными файлами.
+# Случай «скачали один файл»: тянем недостающее с GitHub во временный каталог.
+missing=""
+for part in $PARTS; do
+  [ -f "$SRC_DIR/$part" ] || missing="$missing $part"
+done
+
+if [ -n "$missing" ]; then
+  warn "рядом нет файлов сборщика:$missing"
+  command -v curl >/dev/null 2>&1 || { err "нужен curl: apt install curl"; exit 1; }
+
+  FETCH_DIR="$(mktemp -d)"
+  trap 'rm -rf "$FETCH_DIR"' EXIT
+  echo "  качаю из ветки $REPO_BRANCH ..."
+
+  for part in $PARTS; do
+    if ! curl -fsSL "$RAW_BASE/$part" -o "$FETCH_DIR/$part"; then
+      err "не скачался $part"
+      echo "    проверь доступ: curl -I $RAW_BASE/$part"
+      exit 1
+    fi
+    # Пустой или подменённый на HTML-страницу файл лучше поймать сразу,
+    # чем установить и удивляться потом.
+    if [ ! -s "$FETCH_DIR/$part" ] || head -c 20 "$FETCH_DIR/$part" | grep -qi '<!doctype\|<html'; then
+      err "$part скачался повреждённым"
+      exit 1
+    fi
+  done
+
+  SRC_DIR="$FETCH_DIR"
+  ok "исходники получены ($(echo "$PARTS" | wc -w) файла)"
+  echo
+fi
 
 # ---------- 1. Пользователь ----------
 if id "$SVC_USER" >/dev/null 2>&1; then
