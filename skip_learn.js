@@ -1,3 +1,4 @@
+
 (function () {
     'use strict';
 
@@ -87,8 +88,14 @@
     function mode()         { return Lampa.Storage.get(K_MODE, 'button') || 'button'; }
     function keyMode()      { return Lampa.Storage.get(K_KEY, 'ok') || 'ok'; }
 
+    /**
+     * introdb и introhater не отдают Access-Control-Allow-Origin для чужих
+     * доменов, поэтому из браузера их запросы гибнут на CORS. Оставлены
+     * выключенными: включать имеет смысл только через nginx-прокси.
+     */
     function srcOn(name) {
-        var def = (name === 'kpdb') ? 'false' : 'true';
+        var off = { kpdb: 1, introdb: 1, introhater: 1 };
+        var def = off[name] ? 'false' : 'true';
         return Lampa.Storage.get(K_SRC + name, def) !== false;
     }
     function typeOn(type) {
@@ -458,7 +465,11 @@
 
             best.segs.forEach(function (x) { x.src = best.src; });
             cacheSet(key, best.segs, best.src);
-            log('источник', best.src + ':', best.segs.length, 'сегмент(ов)');
+
+            log('источник', best.src + ':', best.segs.map(function (x) {
+                return x.type + ' ' + x.start + '\u2192' + x.end;
+            }).join(', '));
+
             return best.segs;
         });
     }
@@ -570,7 +581,8 @@
             var s = document.createElement('style');
             s.id = 'skip_learn_css';
             s.innerHTML = ''
-                + '.sl-btn{position:fixed!important;right:2.5em;bottom:11em;z-index:2000;'
+                + '.sl-btn{position:fixed!important;right:2.5em;bottom:11em;'
+                + 'z-index:2147483647!important;'
                 + 'display:flex;align-items:center;gap:.6em;'
                 + 'padding:.8em 1.4em;border-radius:2em;'
                 + 'background:rgba(20,20,22,.88);border:1px solid rgba(255,255,255,.18);'
@@ -610,12 +622,21 @@
                 self.fire();
             });
 
-            document.body.appendChild(el);
+            // плеер — полноэкранный оверлей, кнопка в body оказывается под ним
+            var host = document.querySelector('.player') || document.body;
+            host.appendChild(el);
             this.el = el;
         },
 
         show: function (s) {
             this.build();
+
+            // плеер мог пересоздать свой контейнер — вернём кнопку на место
+            if (!this.el.parentNode || !document.body.contains(this.el)) {
+                this.destroy();
+                this.build();
+            }
+
             if (this.seg === s && this.el.classList.contains('sl-on')) return;
 
             this.seg = s;
@@ -623,6 +644,7 @@
             if (t) t.innerText = TITLES[s.type] || 'Пропустить';
 
             this.el.classList.add('sl-on');
+            log('показал кнопку:', s.type, s.start + '\u2192' + s.end, '(' + (s.src || '') + ')');
         },
 
         hide: function () {
@@ -1076,9 +1098,9 @@
         });
 
         addTrigger(K_SRC + 'theintrodb', true,  'TheIntroDB', 'Основная база, по TMDB');
-        addTrigger(K_SRC + 'introdb',    true,  'IntroDB', 'По TMDB или IMDB');
-        addTrigger(K_SRC + 'introhater', true,  'IntroHater', 'По IMDB');
         addTrigger(K_SRC + 'aniskip',    true,  'AniSkip', 'Аниме, опенинги и эндинги');
+        addTrigger(K_SRC + 'introdb',    false, 'IntroDB', 'Режется CORS, нужен прокси');
+        addTrigger(K_SRC + 'introhater', false, 'IntroHater', 'Режется CORS, нужен прокси');
         addTrigger(K_SRC + 'kpdb',       false, 'KP DB', 'База по Кинопоиску с GitHub');
 
         // ── обучение ──
@@ -1142,6 +1164,44 @@
                 });
 
                 selectShow('Выученные отрезки', items);
+            }
+        });
+
+        Lampa.SettingsApi.addParam({
+            component: 'skip_learn',
+            param: { name: 'skip_learn_test', type: 'button' },
+            field: {
+                name: 'Проверить кнопку',
+                description: 'Показать кнопку на 4 секунды — видно ли её поверх плеера'
+            },
+            onChange: function () {
+                Btn.show({ type: 'intro', start: 0, end: 0, done: false, src: 'тест' });
+                setTimeout(function () { Btn.hide(); }, 4000);
+                Lampa.Noty.show('Кнопка показана на 4 секунды');
+            }
+        });
+
+        Lampa.SettingsApi.addParam({
+            component: 'skip_learn',
+            param: { name: 'skip_learn_now', type: 'button' },
+            field: { name: 'Сегменты текущей серии', description: 'Что плагин нашёл для того, что играет' },
+            onChange: function () {
+                var items = [];
+
+                if (!cur) {
+                    items.push({ title: 'Плеер не запущен', nope: true });
+                } else if (!cur.segs || !cur.segs.length) {
+                    items.push({ title: 'Сегментов нет', subtitle: 'ключ: ' + (cur.key || '—'), nope: true });
+                } else {
+                    cur.segs.forEach(function (s) {
+                        items.push({
+                            title: (TITLES[s.type] || s.type) + (typeOn(s.type) ? '' : '  (выключен)'),
+                            subtitle: fmt(s.start) + ' \u2192 ' + fmt(s.end) + '   [' + (s.src || '') + ']'
+                        });
+                    });
+                }
+
+                selectShow('Сегменты серии', items);
             }
         });
 
